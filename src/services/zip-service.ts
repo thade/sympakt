@@ -13,6 +13,7 @@ import {
   getSplitMaxDuration,
   isLofiActive,
   normalizeLofiMode,
+  createSentinelAudioBuffer,
 } from '../types/index.js';
 import type { LofiMode, SplitSample } from '../types/index.js';
 import {
@@ -38,28 +39,30 @@ async function exportDualSplitPCM(sample: Sample, speedFactor: number): Promise<
 
   const result = new Float32Array(totalSamples); // initialized to 0 (silence)
 
-  // --- Process A sample ---
-  const exportBufferA = await resampleToExportFormat(sample.audioBuffer, speedFactor);
-  let pcmA = getMonoPCM(exportBufferA);
+  // --- Process A sample (skip if empty in dual mode) ---
+  if (!sample.aEmpty) {
+    const exportBufferA = await resampleToExportFormat(sample.audioBuffer, speedFactor);
+    let pcmA = getMonoPCM(exportBufferA);
 
-  if (sample.loop) {
-    const sf = speedFactor;
-    const loopA = isLofiActive(sample.lofi)
-      ? { ...sample.loop, startTime: sample.loop.startTime / sf, endTime: sample.loop.endTime / sf, crossfadeDuration: sample.loop.crossfadeDuration / sf }
-      : sample.loop;
-    if (loopA.crossfadeDuration > 0) {
-      pcmA = applyCrossfade(pcmA, loopA, exportBufferA.sampleRate);
+    if (sample.loop) {
+      const sf = speedFactor;
+      const loopA = isLofiActive(sample.lofi)
+        ? { ...sample.loop, startTime: sample.loop.startTime / sf, endTime: sample.loop.endTime / sf, crossfadeDuration: sample.loop.crossfadeDuration / sf }
+        : sample.loop;
+      if (loopA.crossfadeDuration > 0) {
+        pcmA = applyCrossfade(pcmA, loopA, exportBufferA.sampleRate);
+      }
+      const startSample = Math.round(loopA.startTime * exportBufferA.sampleRate);
+      const endSample = Math.round(loopA.endTime * exportBufferA.sampleRate);
+      pcmA = pcmA.slice(startSample, Math.min(endSample, pcmA.length));
     }
-    const startSample = Math.round(loopA.startTime * exportBufferA.sampleRate);
-    const endSample = Math.round(loopA.endTime * exportBufferA.sampleRate);
-    pcmA = pcmA.slice(startSample, Math.min(endSample, pcmA.length));
+    // Truncate A to half max
+    if (pcmA.length > halfMaxSamples) {
+      pcmA = pcmA.slice(0, halfMaxSamples);
+    }
+    // Write A at the beginning
+    result.set(pcmA, 0);
   }
-  // Truncate A to half max
-  if (pcmA.length > halfMaxSamples) {
-    pcmA = pcmA.slice(0, halfMaxSamples);
-  }
-  // Write A at the beginning
-  result.set(pcmA, 0);
 
   // --- Process B sample (reversed, aligned to end) ---
   if (sample.splitSample) {
@@ -110,6 +113,8 @@ export async function exportSamplePack(
   for (let i = 0; i < slots.length; i++) {
     const sample = slots[i];
     if (!sample) continue;
+    // Skip dual slots that are entirely empty (A empty AND B missing).
+    if (sample.splitEnabled && sample.aEmpty && !sample.splitSample) continue;
 
     const slotNumber = String(i + 1).padStart(2, '0');
     const speedFactor = getLofiSpeedFactor(sample.lofi);
@@ -164,8 +169,9 @@ export async function exportSamplePack(
 
     let exportName: string;
     if (sample.splitEnabled) {
+      const aName = sample.aEmpty ? 'empty' : sanitizeFilename(sample.name);
       const bName = sample.splitSample ? sanitizeFilename(sample.splitSample.name) : 'empty';
-      exportName = `${slotNumber}_${sanitizeFilename(sample.name)}-${bName}_DUAL.wav`;
+      exportName = `${slotNumber}_${aName}-${bName}_DUAL.wav`;
     } else {
       const noteSuffix = sample.detectedNote ? `_${sample.detectedNote}` : '';
       exportName = `${slotNumber}_${sanitizeFilename(sample.name)}${noteSuffix}.wav`;
@@ -186,6 +192,7 @@ export async function exportSamplePack(
       detectedNote: sample.detectedNote ?? undefined,
       reversed: sample.reversed || undefined,
       splitEnabled: sample.splitEnabled || undefined,
+      aEmpty: sample.aEmpty || undefined,
     };
 
     if (sample.splitEnabled && sample.splitSample) {
@@ -204,9 +211,12 @@ export async function exportSamplePack(
 
     // Optionally include original files
     if (options.includeOriginals) {
-      const originalPath = `originals/${sample.originalFileName}`;
-      files[originalPath] = sample.originalFile;
-      meta.originalFilePath = originalPath;
+      // Skip A's original file if A is empty in dual mode
+      if (!(sample.splitEnabled && sample.aEmpty)) {
+        const originalPath = `originals/${sample.originalFileName}`;
+        files[originalPath] = sample.originalFile;
+        meta.originalFilePath = originalPath;
+      }
 
       if (sample.splitEnabled && sample.splitSample) {
         const bOrigPath = `originals/split_b_${sample.splitSample.originalFileName}`;
@@ -373,6 +383,22 @@ export async function importSamplePack(
         reversed: slotMeta?.reversed ?? false,
         splitEnabled: slotMeta?.splitEnabled ?? false,
       };
+
+      // If metadata marks A as empty in dual mode, override audio fields with sentinels.
+      if (slotMeta?.splitEnabled && slotMeta?.aEmpty) {
+        sample.aEmpty = true;
+        sample.audioBuffer = createSentinelAudioBuffer();
+        sample.waveformData = [];
+        sample.duration = 0;
+        sample.originalFile = new Uint8Array(0);
+        sample.name = '';
+        sample.originalFileName = '';
+        sample.loop = null;
+        sample.detectedNote = null;
+        sample.pitchDebug = undefined;
+        sample.reversed = false;
+        sample.isTruncated = false;
+      }
 
       // Restore B-side sample from metadata if split is enabled
       if (slotMeta?.splitEnabled && slotMeta?.splitSample) {

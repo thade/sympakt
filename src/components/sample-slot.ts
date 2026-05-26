@@ -7,6 +7,13 @@ import { playSample, playSampleLooped } from '../services/audio-engine.js';
 import { iconPlay, iconStop, iconLoop, iconCheck, iconClose, iconPlus } from '../icons.js';
 import './waveform-view.js';
 
+// Custom MIME types used to mark sympakt drag sources, so drop targets can
+// validate compatibility during dragover (when the JSON payload itself can't
+// be read for security reasons).
+const MT_MAIN_NONSPLIT = 'application/x-sympakt-main-nonsplit';
+const MT_MAIN_SPLIT = 'application/x-sympakt-main-split';
+const MT_HALF = 'application/x-sympakt-half';
+
 /**
  * A single sample slot in the bank.
  * Displays slot number, sample name, waveform preview, and action buttons.
@@ -54,12 +61,38 @@ export class SampleSlot extends LitElement {
         opacity: 0.4;
       }
 
+      .slot[draggable='true'] {
+        cursor: grab;
+      }
+
+      .slot[draggable='true']:active {
+        cursor: grabbing;
+      }
+
       .slot-number {
         font-family: var(--font-pixel);
         font-size: 8px;
         color: var(--text-muted);
         min-width: 24px;
         text-align: center;
+      }
+
+      .slot-number.draggable {
+        cursor: grab;
+      }
+
+      .slot-number.draggable:active {
+        cursor: grabbing;
+      }
+
+      .slot-number.drag-over {
+        color: var(--accent);
+        background: var(--accent-glow);
+        outline: 1px dashed var(--accent);
+      }
+
+      .slot-number.dragging {
+        opacity: 0.4;
       }
 
       .waveform-container {
@@ -325,6 +358,19 @@ export class SampleSlot extends LitElement {
       .split-half.drag-over {
         background: var(--accent-glow);
         border-radius: 2px;
+        outline: 1px dashed var(--accent);
+      }
+
+      .split-half.dragging {
+        opacity: 0.4;
+      }
+
+      .split-half[draggable='true'] {
+        cursor: grab;
+      }
+
+      .split-half[draggable='true']:active {
+        cursor: grabbing;
       }
 
       .split-label {
@@ -405,6 +451,9 @@ export class SampleSlot extends LitElement {
   @state() private dragOverA = false;
   @state() private dragOverB = false;
   @state() private dragging = false;
+  @state() private draggingA = false;
+  @state() private draggingB = false;
+  @state() private dragOverNumber = false;
   @state() private playing = false;
   @state() private playingB = false;
   @state() private confirmingRemove = false;
@@ -448,20 +497,32 @@ export class SampleSlot extends LitElement {
     const cls = `slot${this.dragOver ? ' drag-over' : ''}${this.dragging ? ' dragging' : ''}${this.selected ? ' selected' : ''}`;
 
     const isSplit = this.sample?.splitEnabled ?? false;
+    // In split mode, the .slot itself is not a drag source/target. Instead, the
+    // slot-number acts as the whole-slot handle and each half handles its own side.
+    const slotDraggable = !!this.sample && !isSplit;
+    const numberCls = `slot-number${isSplit ? ' draggable' : ''}${this.dragOverNumber ? ' drag-over' : ''}${this.dragging && isSplit ? ' dragging' : ''}`;
 
     return html`
       <div
         class=${cls}
-        draggable=${this.sample ? 'true' : 'false'}
+        draggable=${slotDraggable ? 'true' : 'false'}
         @dragstart=${this.onDragStart}
         @dragend=${this.onDragEnd}
-        @dragover=${this.onDragOver}
-        @dragleave=${this.onDragLeave}
-        @drop=${this.onDrop}
+        @dragover=${isSplit ? undefined : this.onDragOver}
+        @dragleave=${isSplit ? undefined : this.onDragLeave}
+        @drop=${isSplit ? undefined : this.onDrop}
         @click=${this.onSlotClick}
         @contextmenu=${this.sample ? this.onContextMenu : undefined}
       >
-        <span class="slot-number">${slotNum}</span>
+        <span
+          class=${numberCls}
+          draggable=${isSplit && this.sample ? 'true' : 'false'}
+          @dragstart=${this.onNumberDragStart}
+          @dragend=${this.onNumberDragEnd}
+          @dragover=${isSplit ? this.onNumberDragOver : undefined}
+          @dragleave=${isSplit ? this.onNumberDragLeave : undefined}
+          @drop=${isSplit ? this.onNumberDrop : undefined}
+        >${slotNum}</span>
 
         ${isSplit
           ? this.renderSplitMode()
@@ -556,59 +617,74 @@ export class SampleSlot extends LitElement {
     if (!this.sample) return nothing;
     const splitB = this.sample.splitSample;
     const splitMax = this.splitMaxDuration;
+    const aEmpty = !!this.sample.aEmpty;
 
     return html`
       <div class="split-container">
         <!-- A side -->
-        <div class="split-half ${this.dragOverA ? 'drag-over' : ''}"
+        <div class="split-half ${this.dragOverA ? 'drag-over' : ''} ${this.draggingA ? 'dragging' : ''}"
+          draggable=${aEmpty ? 'false' : 'true'}
+          @dragstart=${this.onHalfDragStartA}
+          @dragend=${this.onHalfDragEndA}
           @dragover=${this.onDragOverA}
           @dragleave=${this.onDragLeaveA}
           @drop=${this.onDropA}
         >
           <span class="split-label">A</span>
-          <div class="waveform-container">
-            <sp-waveform
-              .data=${this.sample.waveformData}
-              .duration=${this.sample.duration}
-              .truncated=${this.sample.isTruncated}
-              .loopEnabled=${this.sample.loop !== null}
-              .loop=${this.sample.loop}
-              .audioBuffer=${this.sample.audioBuffer}
-              .lofi=${this.sample.lofi}
-              .effectiveMaxOverride=${splitMax}
-              @loop-change=${this.onLoopChange}
-            ></sp-waveform>
-          </div>
-          <span class="sample-name-wrap" @click=${this.renamingTarget === 'a' ? undefined : this.toggleSplitMenu}>
-            ${this.renamingTarget === 'a'
-              ? html`<input class="rename-input" type="text"
-                  .value=${this.sample.name}
-                  @keydown=${this.onRenameKeydownA}
-                  @blur=${this.onRenameBlurA}
-                  @click=${(e: Event) => e.stopPropagation()}
-                />`
-              : html`<span class="sample-name" title=${this.sample.name}>${this.sample.name}</span>`}
-            ${this.splitMenuOpen ? this.renderSplitMenu('a') : nothing}
-          </span>
-          <span class="duration ${this.sample.isTruncated && !this.sample.loop ? 'truncated' : ''}">
-            ${this.sample.loop
-              ? formatDuration(this.sample.loop.endTime - this.sample.loop.startTime)
-              : formatDuration(Math.min(this.sample.duration, splitMax))}
-          </span>
-          <div class="split-actions">
-            <button class="btn-play" @click=${this.togglePlay} title="${this.playing ? 'Stop A' : 'Play A'}">
-              ${this.playing ? iconStop : iconPlay}
-            </button>
-            <button
-              class="btn-loop ${this.sample.loop !== null ? 'active' : ''}"
-              @click=${this.toggleLoop}
-              title="${this.sample.loop !== null ? 'Disable loop A' : 'Enable loop A'}"
-            >${iconLoop}</button>
-          </div>
+          ${aEmpty
+            ? html`
+                <div class="waveform-container">
+                  <div class="empty-slot" @click=${this.onClickImport} title="Drop or click to add A sample">Drop or click</div>
+                </div>
+              `
+            : html`
+                <div class="waveform-container">
+                  <sp-waveform
+                    .data=${this.sample.waveformData}
+                    .duration=${this.sample.duration}
+                    .truncated=${this.sample.isTruncated}
+                    .loopEnabled=${this.sample.loop !== null}
+                    .loop=${this.sample.loop}
+                    .audioBuffer=${this.sample.audioBuffer}
+                    .lofi=${this.sample.lofi}
+                    .effectiveMaxOverride=${splitMax}
+                    @loop-change=${this.onLoopChange}
+                  ></sp-waveform>
+                </div>
+                <span class="sample-name-wrap" @click=${this.renamingTarget === 'a' ? undefined : this.toggleSplitMenu}>
+                  ${this.renamingTarget === 'a'
+                    ? html`<input class="rename-input" type="text"
+                        .value=${this.sample.name}
+                        @keydown=${this.onRenameKeydownA}
+                        @blur=${this.onRenameBlurA}
+                        @click=${(e: Event) => e.stopPropagation()}
+                      />`
+                    : html`<span class="sample-name" title=${this.sample.name}>${this.sample.name}</span>`}
+                  ${this.splitMenuOpen ? this.renderSplitMenu('a') : nothing}
+                </span>
+                <span class="duration ${this.sample.isTruncated && !this.sample.loop ? 'truncated' : ''}">
+                  ${this.sample.loop
+                    ? formatDuration(this.sample.loop.endTime - this.sample.loop.startTime)
+                    : formatDuration(Math.min(this.sample.duration, splitMax))}
+                </span>
+                <div class="split-actions">
+                  <button class="btn-play" @click=${this.togglePlay} title="${this.playing ? 'Stop A' : 'Play A'}">
+                    ${this.playing ? iconStop : iconPlay}
+                  </button>
+                  <button
+                    class="btn-loop ${this.sample.loop !== null ? 'active' : ''}"
+                    @click=${this.toggleLoop}
+                    title="${this.sample.loop !== null ? 'Disable loop A' : 'Enable loop A'}"
+                  >${iconLoop}</button>
+                </div>
+              `}
         </div>
 
         <!-- B side -->
-        <div class="split-half ${this.dragOverB ? 'drag-over' : ''}"
+        <div class="split-half ${this.dragOverB ? 'drag-over' : ''} ${this.draggingB ? 'dragging' : ''}"
+          draggable=${splitB ? 'true' : 'false'}
+          @dragstart=${this.onHalfDragStartB}
+          @dragend=${this.onHalfDragEndB}
           @dragover=${this.onDragOverB}
           @dragleave=${this.onDragLeaveB}
           @drop=${this.onDropB}
@@ -1332,15 +1408,28 @@ export class SampleSlot extends LitElement {
   }
 
   // --- Split-mode Drag & Drop (per-half) ---
-  // Only handle file drops here. Reorder drags (no Files type) bubble up
-  // to the parent slot so dual-split slots can be reordered like any other.
+  // Handle three drop kinds on each half:
+  //   1. Audio files / folders dropped from OS → sample-import (existing behavior)
+  //   2. Half drag from another (or same) slot → content swap
+  //   3. Main drag from a non-split slot → content swap
+  // Main drag from a split slot is rejected (use the slot-number drop area instead).
 
   private onDragOverA(e: DragEvent): void {
-    if (!e.dataTransfer?.types.includes('Files')) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = 'copy';
-    this.dragOverA = true;
+    const types = e.dataTransfer?.types;
+    if (!types) return;
+    if (types.includes('Files')) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer!.dropEffect = 'copy';
+      this.dragOverA = true;
+      return;
+    }
+    if (types.includes(MT_HALF) || types.includes(MT_MAIN_NONSPLIT)) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer!.dropEffect = 'move';
+      this.dragOverA = true;
+    }
   }
 
   private onDragLeaveA(e: DragEvent): void {
@@ -1350,34 +1439,54 @@ export class SampleSlot extends LitElement {
   }
 
   private onDropA(e: DragEvent): void {
-    if (!e.dataTransfer?.types.includes('Files')) return;
+    const types = e.dataTransfer?.types;
+    if (!types) return;
+    const isFile = types.includes('Files');
+    const isSympakt = types.includes(MT_HALF) || types.includes(MT_MAIN_NONSPLIT);
+    if (!isFile && !isSympakt) return;
     e.preventDefault();
     e.stopPropagation();
     this.dragOverA = false;
 
-    const files = e.dataTransfer.files;
-    if (files && files.length > 0) {
-      const audioFile = Array.from(files).find(
-        (f) => f.type.startsWith('audio/') || f.name.match(/\.(wav|mp3|ogg|flac|aiff|m4a)$/i),
-      );
-      if (audioFile) {
-        this.dispatchEvent(
-          new CustomEvent('sample-import', {
-            detail: { index: this.index, file: audioFile },
-            bubbles: true,
-            composed: true,
-          }),
+    if (isFile) {
+      const files = e.dataTransfer!.files;
+      if (files && files.length > 0) {
+        const audioFile = Array.from(files).find(
+          (f) => f.type.startsWith('audio/') || f.name.match(/\.(wav|mp3|ogg|flac|aiff|m4a)$/i),
         );
+        if (audioFile) {
+          this.dispatchEvent(
+            new CustomEvent('sample-import', {
+              detail: { index: this.index, file: audioFile },
+              bubbles: true,
+              composed: true,
+            }),
+          );
+        }
       }
+      return;
     }
+
+    const payload = SampleSlot.getDragPayload(e);
+    if (payload) this.dispatchSwap(payload, 'a');
   }
 
   private onDragOverB(e: DragEvent): void {
-    if (!e.dataTransfer?.types.includes('Files')) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = 'copy';
-    this.dragOverB = true;
+    const types = e.dataTransfer?.types;
+    if (!types) return;
+    if (types.includes('Files')) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer!.dropEffect = 'copy';
+      this.dragOverB = true;
+      return;
+    }
+    if (types.includes(MT_HALF) || types.includes(MT_MAIN_NONSPLIT)) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer!.dropEffect = 'move';
+      this.dragOverB = true;
+    }
   }
 
   private onDragLeaveB(e: DragEvent): void {
@@ -1387,35 +1496,152 @@ export class SampleSlot extends LitElement {
   }
 
   private onDropB(e: DragEvent): void {
-    if (!e.dataTransfer?.types.includes('Files')) return;
+    const types = e.dataTransfer?.types;
+    if (!types) return;
+    const isFile = types.includes('Files');
+    const isSympakt = types.includes(MT_HALF) || types.includes(MT_MAIN_NONSPLIT);
+    if (!isFile && !isSympakt) return;
     e.preventDefault();
     e.stopPropagation();
     this.dragOverB = false;
 
-    const files = e.dataTransfer.files;
-    if (files && files.length > 0) {
-      const audioFile = Array.from(files).find(
-        (f) => f.type.startsWith('audio/') || f.name.match(/\.(wav|mp3|ogg|flac|aiff|m4a)$/i),
-      );
-      if (audioFile) {
-        this.dispatchEvent(
-          new CustomEvent('split-sample-import', {
-            detail: { index: this.index, file: audioFile },
-            bubbles: true,
-            composed: true,
-          }),
+    if (isFile) {
+      const files = e.dataTransfer!.files;
+      if (files && files.length > 0) {
+        const audioFile = Array.from(files).find(
+          (f) => f.type.startsWith('audio/') || f.name.match(/\.(wav|mp3|ogg|flac|aiff|m4a)$/i),
         );
+        if (audioFile) {
+          this.dispatchEvent(
+            new CustomEvent('split-sample-import', {
+              detail: { index: this.index, file: audioFile },
+              bubbles: true,
+              composed: true,
+            }),
+          );
+        }
       }
+      return;
+    }
+
+    const payload = SampleSlot.getDragPayload(e);
+    if (payload) this.dispatchSwap(payload, 'b');
+  }
+
+  // --- Half drag sources (A / B in split mode) ---
+
+  private onHalfDragStartA(e: DragEvent): void {
+    if (!this.sample?.splitEnabled || this.sample.aEmpty) {
+      e.preventDefault();
+      return;
+    }
+    e.stopPropagation();
+    this.setHalfDragImage(e, e.currentTarget as HTMLElement);
+    this.draggingA = true;
+    this.setDragData(e, 'a');
+  }
+
+  private onHalfDragEndA(e: DragEvent): void {
+    e.stopPropagation();
+    this.draggingA = false;
+  }
+
+  private onHalfDragStartB(e: DragEvent): void {
+    if (!this.sample?.splitSample) {
+      e.preventDefault();
+      return;
+    }
+    e.stopPropagation();
+    this.setHalfDragImage(e, e.currentTarget as HTMLElement);
+    this.draggingB = true;
+    this.setDragData(e, 'b');
+  }
+
+  private onHalfDragEndB(e: DragEvent): void {
+    e.stopPropagation();
+    this.draggingB = false;
+  }
+
+  // --- Slot-number (whole-slot handle in split mode) ---
+
+  private onNumberDragStart(e: DragEvent): void {
+    if (!this.sample?.splitEnabled) {
+      // Slot-number only initiates a drag in split mode (otherwise the
+      // whole .slot is already the drag handle).
+      e.preventDefault();
+      return;
+    }
+    e.stopPropagation();
+    // Use the full .slot element as the drag image so the dragged "ghost" shows
+    // the whole row, not just the small slot-number span.
+    const slot = this.shadowRoot?.querySelector('.slot') as HTMLElement | null;
+    if (slot && e.dataTransfer) {
+      const slotRect = slot.getBoundingClientRect();
+      e.dataTransfer.setDragImage(
+        slot,
+        Math.max(0, e.clientX - slotRect.left),
+        Math.max(0, e.clientY - slotRect.top),
+      );
+    }
+    this.dragging = true;
+    this.setDragData(e, 'main');
+  }
+
+  private onNumberDragEnd(e: DragEvent): void {
+    e.stopPropagation();
+    this.dragging = false;
+  }
+
+  private onNumberDragOver(e: DragEvent): void {
+    const types = e.dataTransfer?.types;
+    if (!types) return;
+    // Slot-number only accepts whole-slot main drags (shift). Reject halves.
+    if (types.includes(MT_MAIN_NONSPLIT) || types.includes(MT_MAIN_SPLIT)) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer!.dropEffect = 'move';
+      this.dragOverNumber = true;
+      this.dragOver = true;
     }
   }
 
-  // --- Drag & Drop ---
+  private onNumberDragLeave(e: DragEvent): void {
+    if (!this.dragOverNumber) return;
+    e.stopPropagation();
+    this.dragOverNumber = false;
+    this.dragOver = false;
+  }
+
+  private onNumberDrop(e: DragEvent): void {
+    const types = e.dataTransfer?.types;
+    if (!types) return;
+    if (!types.includes(MT_MAIN_NONSPLIT) && !types.includes(MT_MAIN_SPLIT)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.dragOverNumber = false;
+    this.dragOver = false;
+
+    const payload = SampleSlot.getDragPayload(e);
+    if (payload && payload.side === 'main' && payload.index !== this.index) {
+      this.dispatchEvent(
+        new CustomEvent('sample-move', {
+          detail: { from: payload.index, to: this.index },
+          bubbles: true,
+          composed: true,
+        }),
+      );
+    }
+  }
+
+  // --- Drag & Drop (whole non-split slot) ---
 
   private onDragStart(e: DragEvent): void {
-    if (!this.sample) return;
+    if (!this.sample || this.sample.splitEnabled) {
+      e.preventDefault();
+      return;
+    }
     this.dragging = true;
-    e.dataTransfer!.effectAllowed = 'move';
-    e.dataTransfer!.setData('text/plain', String(this.index));
+    this.setDragData(e, 'main');
   }
 
   private onDragEnd(): void {
@@ -1423,9 +1649,24 @@ export class SampleSlot extends LitElement {
   }
 
   private onDragOver(e: DragEvent): void {
-    e.preventDefault();
-    e.dataTransfer!.dropEffect = 'move';
-    this.dragOver = true;
+    const types = e.dataTransfer?.types;
+    if (!types) return;
+    if (types.includes('Files')) {
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = 'copy';
+      this.dragOver = true;
+      return;
+    }
+    // Accept any sympakt drag on a non-split slot (main = shift, half = swap)
+    if (
+      types.includes(MT_MAIN_NONSPLIT) ||
+      types.includes(MT_MAIN_SPLIT) ||
+      types.includes(MT_HALF)
+    ) {
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = 'move';
+      this.dragOver = true;
+    }
   }
 
   private onDragLeave(): void {
@@ -1476,17 +1717,125 @@ export class SampleSlot extends LitElement {
       }
     }
 
-    // Otherwise it's a reorder drag
-    const fromIndex = parseInt(e.dataTransfer!.getData('text/plain'), 10);
-    if (!isNaN(fromIndex) && fromIndex !== this.index) {
+    // Otherwise it's a sympakt reorder/swap drag
+    const payload = SampleSlot.getDragPayload(e);
+    if (payload) this.dispatchSwap(payload, 'main');
+  }
+
+  // --- Drag helpers ---
+
+  private setDragData(e: DragEvent, side: 'main' | 'a' | 'b'): void {
+    const dt = e.dataTransfer;
+    if (!dt) return;
+    dt.effectAllowed = 'move';
+    dt.setData('text/plain', JSON.stringify({ index: this.index, side }));
+    if (side === 'main') {
+      const isSplit = this.sample?.splitEnabled ?? false;
+      dt.setData(isSplit ? MT_MAIN_SPLIT : MT_MAIN_NONSPLIT, '1');
+    } else {
+      dt.setData(MT_HALF, '1');
+    }
+  }
+
+  /**
+   * Apply transient inline styling to the half so the browser-captured drag
+   * snapshot has a visible border/background (giving it a "slot fragment" look).
+   * Uses inline `style.*` properties because Lit's `class=` binding can race
+   * with classList mutations and strip a temporarily-added class. Inline styles
+   * are untouched by Lit and reliably persist for the snapshot.
+   * The styles are cleared on the next tick — by then the browser has already
+   * taken the snapshot.
+   */
+  private setHalfDragImage(e: DragEvent, half: HTMLElement | null): void {
+    if (!half || !e.dataTransfer) return;
+    // Snapshot original inline styles so we can restore them
+    const orig = {
+      background: half.style.background,
+      border: half.style.border,
+      borderLeft: half.style.borderLeft,
+      borderRadius: half.style.borderRadius,
+      padding: half.style.padding,
+      paddingLeft: half.style.paddingLeft,
+      marginLeft: half.style.marginLeft,
+      boxShadow: half.style.boxShadow,
+    };
+    // Apply slot-fragment styling. We must explicitly override border-left /
+    // padding-left / margin-left because `.split-half + .split-half` has the
+    // same specificity and would otherwise keep the dashed vertical separator
+    // when B is the drag source.
+    half.style.background = 'var(--bg-slot)';
+    half.style.border = '1px solid var(--accent)';
+    half.style.borderLeft = '1px solid var(--accent)';
+    half.style.borderRadius = '2px';
+    half.style.padding = '4px 6px';
+    half.style.paddingLeft = '6px';
+    half.style.marginLeft = '0';
+    half.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.5)';
+
+    const rect = half.getBoundingClientRect();
+    e.dataTransfer.setDragImage(
+      half,
+      Math.max(0, e.clientX - rect.left),
+      Math.max(0, e.clientY - rect.top),
+    );
+
+    // Restore original styles on the next tick — the snapshot is taken
+    // synchronously at the end of the dragstart handler, so by the time this
+    // runs the bitmap already includes our temporary styling.
+    setTimeout(() => {
+      half.style.background = orig.background;
+      half.style.border = orig.border;
+      half.style.borderLeft = orig.borderLeft;
+      half.style.borderRadius = orig.borderRadius;
+      half.style.padding = orig.padding;
+      half.style.paddingLeft = orig.paddingLeft;
+      half.style.marginLeft = orig.marginLeft;
+      half.style.boxShadow = orig.boxShadow;
+    }, 0);
+  }
+
+  private static getDragPayload(e: DragEvent): { index: number; side: 'main' | 'a' | 'b' } | null {
+    try {
+      const text = e.dataTransfer?.getData('text/plain');
+      if (!text) return null;
+      const parsed = JSON.parse(text);
+      if (
+        typeof parsed?.index === 'number' &&
+        (parsed.side === 'main' || parsed.side === 'a' || parsed.side === 'b')
+      ) {
+        return parsed;
+      }
+    } catch {
+      // not JSON — ignore
+    }
+    return null;
+  }
+
+  /** Decide between sample-move (main→main shift) and sample-swap (content swap). */
+  private dispatchSwap(from: { index: number; side: 'main' | 'a' | 'b' }, toSide: 'main' | 'a' | 'b'): void {
+    if (from.index === this.index && from.side === toSide) return;
+    if (from.side === 'main' && toSide === 'main') {
       this.dispatchEvent(
         new CustomEvent('sample-move', {
-          detail: { from: fromIndex, to: this.index },
+          detail: { from: from.index, to: this.index },
           bubbles: true,
           composed: true,
         }),
       );
+      return;
     }
+    this.dispatchEvent(
+      new CustomEvent('sample-swap', {
+        detail: {
+          fromIndex: from.index,
+          fromSide: from.side,
+          toIndex: this.index,
+          toSide,
+        },
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   private async handleFolderDrop(dirEntry: FileSystemDirectoryEntry): Promise<void> {

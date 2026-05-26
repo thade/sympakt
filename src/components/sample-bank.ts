@@ -169,6 +169,7 @@ export class SampleBank extends LitElement {
               @sample-import-batch=${this.onSampleImportBatch}
               @sample-remove=${this.onSampleRemove}
               @sample-move=${this.onSampleMove}
+              @sample-swap=${this.onSampleSwap}
               @loop-update=${this.onLoopUpdate}
               @lofi-toggle=${this.onLofiToggle}
               @note-change=${this.onNoteChange}
@@ -233,6 +234,18 @@ export class SampleBank extends LitElement {
 
   private onSampleMove(e: CustomEvent<{ from: number; to: number }>): void {
     bankState.moveSample(e.detail.from, e.detail.to);
+  }
+
+  private onSampleSwap(
+    e: CustomEvent<{
+      fromIndex: number;
+      fromSide: 'main' | 'a' | 'b';
+      toIndex: number;
+      toSide: 'main' | 'a' | 'b';
+    }>,
+  ): void {
+    const { fromIndex, fromSide, toIndex, toSide } = e.detail;
+    bankState.swapSamples(fromIndex, fromSide, toIndex, toSide);
   }
 
   private onLoopUpdate(e: CustomEvent<{ index: number; loop: LoopSettings | null }>): void {

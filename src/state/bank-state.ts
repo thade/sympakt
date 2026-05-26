@@ -1,9 +1,193 @@
 import { ReactiveController, ReactiveControllerHost } from 'lit';
-import { Sample, MAX_SLOTS, getEffectiveMaxDuration, getSplitMaxDuration } from '../types/index.js';
-import type { LoopSettings, LofiMode, SplitSample } from '../types/index.js';
+import { Sample, MAX_SLOTS, getEffectiveMaxDuration, getSplitMaxDuration, createSentinelAudioBuffer } from '../types/index.js';
+import type { LoopSettings, LofiMode, SplitSample, PitchDebugInfo } from '../types/index.js';
 import { saveBank, loadBank, clearAll as clearPersistedData } from '../services/persistence.js';
 
 type BankListener = () => void;
+
+/** Source/target side for swap operations */
+export type SwapSide = 'main' | 'a' | 'b';
+
+/** Movable audio content (subset shared between Sample and SplitSample) */
+interface SampleContent {
+  name: string;
+  originalFileName: string;
+  audioBuffer: AudioBuffer;
+  waveformData: number[];
+  duration: number;
+  originalFile: Uint8Array;
+  loop: LoopSettings | null;
+  detectedNote: string | null;
+  pitchDebug?: PitchDebugInfo;
+  reversed?: boolean;
+}
+
+/** True if the slot has content at the given side */
+function hasContentAt(slot: Sample | null, side: SwapSide): boolean {
+  if (!slot) return false;
+  if (side === 'main' || side === 'a') {
+    // In dual mode the A side can be flagged empty; in non-split mode the Sample
+    // is the slot itself so it's always non-empty when slot is non-null.
+    if (slot.splitEnabled && slot.aEmpty) return false;
+    return true;
+  }
+  return slot.splitSample != null;
+}
+
+/** Extract movable audio content from a slot at the given side */
+function extractContent(slot: Sample, side: SwapSide): SampleContent | null {
+  if (side === 'main' || side === 'a') {
+    if (slot.splitEnabled && slot.aEmpty) return null;
+    return {
+      name: slot.name,
+      originalFileName: slot.originalFileName,
+      audioBuffer: slot.audioBuffer,
+      waveformData: slot.waveformData,
+      duration: slot.duration,
+      originalFile: slot.originalFile,
+      loop: slot.loop,
+      detectedNote: slot.detectedNote,
+      pitchDebug: slot.pitchDebug,
+      reversed: slot.reversed,
+    };
+  }
+  const sb = slot.splitSample;
+  if (!sb) return null;
+  return {
+    name: sb.name,
+    originalFileName: sb.originalFileName,
+    audioBuffer: sb.audioBuffer,
+    waveformData: sb.waveformData,
+    duration: sb.duration,
+    originalFile: sb.originalFile,
+    loop: sb.loop,
+    detectedNote: sb.detectedNote,
+    pitchDebug: sb.pitchDebug,
+    reversed: sb.reversed,
+  };
+}
+
+/** If a dual slot has both A empty (aEmpty) and B empty (no splitSample), null it out. */
+function cleanupEmptyDual(slot: Sample | null): Sample | null {
+  if (!slot) return null;
+  if (slot.splitEnabled && slot.aEmpty && !slot.splitSample) return null;
+  return slot;
+}
+
+/** Clamp a loop's duration to effectiveMax, also clamping crossfade to available source audio */
+function clampLoop(
+  loop: LoopSettings | null,
+  audioDuration: number,
+  effectiveMax: number,
+): LoopSettings | null {
+  if (!loop) return null;
+  const loopLen = loop.endTime - loop.startTime;
+  if (loopLen <= effectiveMax) return loop;
+  const newEnd = Math.min(loop.startTime + effectiveMax, audioDuration);
+  const maxCfSource = loop.crossfadeAtStart
+    ? audioDuration - newEnd
+    : loop.startTime;
+  return {
+    ...loop,
+    endTime: newEnd,
+    crossfadeDuration: Math.min(loop.crossfadeDuration, newEnd - loop.startTime, maxCfSource),
+  };
+}
+
+/** Apply movable content into a slot at the given side, preserving slot config (lofi, splitEnabled) */
+function applyContent(
+  slot: Sample | null,
+  side: SwapSide,
+  content: SampleContent | null,
+): Sample | null {
+  if (side === 'main' || side === 'a') {
+    if (!content) {
+      // Emptying A: in dual mode, keep the slot but mark A as empty (sentinel audio fields).
+      // In non-split mode, slot becomes null.
+      if (slot?.splitEnabled) {
+        return {
+          ...slot,
+          name: '',
+          originalFileName: '',
+          audioBuffer: createSentinelAudioBuffer(),
+          waveformData: [],
+          duration: 0,
+          isTruncated: false,
+          originalFile: new Uint8Array(0),
+          loop: null,
+          detectedNote: null,
+          pitchDebug: undefined,
+          reversed: undefined,
+          aEmpty: true,
+        };
+      }
+      return null;
+    }
+    if (slot) {
+      const effectiveMax = slot.splitEnabled
+        ? getSplitMaxDuration(slot.lofi)
+        : getEffectiveMaxDuration(slot.lofi);
+      const isTruncated = content.duration > effectiveMax;
+      const loop = clampLoop(content.loop, content.audioBuffer.duration, effectiveMax);
+      return {
+        ...slot,
+        name: content.name,
+        originalFileName: content.originalFileName,
+        audioBuffer: content.audioBuffer,
+        waveformData: content.waveformData,
+        duration: content.duration,
+        originalFile: content.originalFile,
+        loop,
+        detectedNote: content.detectedNote,
+        pitchDebug: content.pitchDebug,
+        reversed: content.reversed,
+        isTruncated,
+        aEmpty: false,
+      };
+    }
+    // New non-split slot from content
+    const isTruncated = content.duration > getEffectiveMaxDuration('off');
+    return {
+      id: crypto.randomUUID(),
+      name: content.name,
+      originalFileName: content.originalFileName,
+      audioBuffer: content.audioBuffer,
+      waveformData: content.waveformData,
+      duration: content.duration,
+      isTruncated,
+      originalFile: content.originalFile,
+      loop: content.loop,
+      lofi: 'off',
+      detectedNote: content.detectedNote,
+      pitchDebug: content.pitchDebug,
+      reversed: content.reversed,
+    };
+  }
+  // side === 'b'
+  if (!slot) return null;
+  if (!content) {
+    return { ...slot, splitSample: null };
+  }
+  const splitMax = getSplitMaxDuration(slot.lofi);
+  const isTruncated = content.duration > splitMax;
+  const loop = clampLoop(content.loop, content.audioBuffer.duration, splitMax);
+  return {
+    ...slot,
+    splitSample: {
+      name: content.name,
+      originalFileName: content.originalFileName,
+      audioBuffer: content.audioBuffer,
+      waveformData: content.waveformData,
+      duration: content.duration,
+      isTruncated,
+      originalFile: content.originalFile,
+      loop,
+      detectedNote: content.detectedNote,
+      pitchDebug: content.pitchDebug,
+      reversed: content.reversed,
+    },
+  };
+}
 
 /**
  * Reactive state store for the 64-slot sample bank.
@@ -245,7 +429,7 @@ class BankStateStore {
   removeSplitSample(index: number): void {
     const sample = this.slots[index];
     if (!sample) return;
-    this.slots[index] = { ...sample, splitSample: null };
+    this.slots[index] = cleanupEmptyDual({ ...sample, splitSample: null });
     this.notify();
   }
 
@@ -385,6 +569,48 @@ class BankStateStore {
     const sample = this.slots[fromIndex];
     this.slots.splice(fromIndex, 1);
     this.slots.splice(toIndex, 0, sample);
+    this.notify();
+  }
+
+  /**
+   * Swap audio content between two slot positions, identified by (index, side).
+   * - side 'main': the whole non-split slot's sample, OR the A side of a split slot (treated as the slot's main sample).
+   * - side 'a' / 'b': the A or B half of a dual split slot.
+   *
+   * Slot configuration (lofi, splitEnabled, id, the *other* split half) is preserved at each slot.
+   * Loop and isTruncated are recomputed against the destination's effective max duration.
+   *
+   * In dual slot mode, A can become empty (marked via the `aEmpty` flag with sentinel audio fields).
+   * If both A and B end up empty in the source dual slot, the slot is cleared to null.
+   */
+  swapSamples(
+    fromIndex: number,
+    fromSide: SwapSide,
+    toIndex: number,
+    toSide: SwapSide,
+  ): void {
+    if (fromIndex < 0 || fromIndex >= MAX_SLOTS) return;
+    if (toIndex < 0 || toIndex >= MAX_SLOTS) return;
+    if (fromIndex === toIndex && fromSide === toSide) return;
+
+    const fromSlot = this.slots[fromIndex];
+    const toSlot = this.slots[toIndex];
+
+    // Source must have content at the chosen side
+    if (!hasContentAt(fromSlot, fromSide)) return;
+
+    const fromContent = extractContent(fromSlot!, fromSide);
+    const toContent = toSlot ? extractContent(toSlot, toSide) : null;
+
+    if (fromIndex === toIndex) {
+      // Same slot: apply both swaps sequentially
+      let updated = applyContent(fromSlot, fromSide, toContent);
+      updated = applyContent(updated, toSide, fromContent);
+      this.slots[fromIndex] = cleanupEmptyDual(updated);
+    } else {
+      this.slots[fromIndex] = cleanupEmptyDual(applyContent(fromSlot, fromSide, toContent));
+      this.slots[toIndex] = cleanupEmptyDual(applyContent(toSlot, toSide, fromContent));
+    }
     this.notify();
   }
 

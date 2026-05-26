@@ -25,6 +25,8 @@ interface StoredSample {
   detectedNote: string | null;
   reversed?: boolean;
   splitEnabled?: boolean;
+  /** When in dual split mode, true means the A side is empty */
+  aEmpty?: boolean;
   splitSample?: StoredSplitSample | null;
 }
 
@@ -120,6 +122,7 @@ function serializeSample(sample: Sample): StoredSample {
     detectedNote: sample.detectedNote,
     reversed: sample.reversed,
     splitEnabled: sample.splitEnabled,
+    aEmpty: sample.aEmpty,
     splitSample: storedSplit,
   };
 }
@@ -174,6 +177,7 @@ function deserializeSample(stored: StoredSample): Sample {
     detectedNote: stored.detectedNote ?? null,
     reversed: stored.reversed,
     splitEnabled: stored.splitEnabled ?? false,
+    aEmpty: stored.aEmpty,
     splitSample: splitSample ?? undefined,
   };
 }

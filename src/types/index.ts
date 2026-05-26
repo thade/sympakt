@@ -45,6 +45,13 @@ export interface Sample {
   splitEnabled?: boolean;
   /** B-side sample data in dual split mode (null/undefined = no B sample) */
   splitSample?: SplitSample | null;
+  /**
+   * When `splitEnabled` is true, indicates the A side is empty.
+   * The Sample's audio fields are set to sentinel values (silent 1-frame buffer, empty name)
+   * and should be ignored by render/playback/export logic. Use the helper `isASideEmpty(sample)`
+   * to test. Ignored when `splitEnabled` is false.
+   */
+  aEmpty?: boolean;
 }
 
 /** B-side sample in dual split mode */
@@ -112,6 +119,8 @@ export interface SlotMetadata {
   reversed?: boolean;
   /** Dual split mode enabled */
   splitEnabled?: boolean;
+  /** When in dual split mode, true means the A side is empty */
+  aEmpty?: boolean;
   /** B-side sample metadata in dual split */
   splitSample?: {
     name: string;
@@ -198,4 +207,19 @@ export function normalizeLofiMode(value: LofiMode | boolean | undefined): LofiMo
   if (value === true) return 'lofi';
   if (value === false || value === undefined) return 'off';
   return value;
+}
+
+/**
+ * True when the slot's A side is "empty" in dual split mode.
+ * In dual mode the Sample IS the A side, so this checks the `aEmpty` flag.
+ * In non-split mode, A is never considered empty (the Sample is the slot itself).
+ */
+export function isASideEmpty(sample: Sample | null | undefined): boolean {
+  if (!sample) return false;
+  return !!(sample.splitEnabled && sample.aEmpty);
+}
+
+/** Create a tiny 1-frame silent AudioBuffer to use as a sentinel when A is empty in dual mode */
+export function createSentinelAudioBuffer(): AudioBuffer {
+  return new AudioBuffer({ length: 1, sampleRate: EXPORT_SAMPLE_RATE, numberOfChannels: 1 });
 }

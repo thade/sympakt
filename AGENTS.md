@@ -191,6 +191,32 @@ npm run preview
 - **ZIP roundtrip**: `splitEnabled` and `splitSample` metadata fields are stored in `sympakt.json`. B-side original files are stored under `originals/split_b_<filename>`.
 - **LOFI interaction**: changing LOFI mode recalculates truncation and clamps loops for both A and B sides.
 
+## Drag & Drop Reordering
+
+Every slot supports three kinds of drag interactions: file import (drop external audio onto a slot or half), whole-slot reorder (shift), and content swap (between halves and/or non-split slots).
+
+- **Drag handles & drop targets**:
+  - Non-split slot: the entire slot body is both a draggable handle (whole-slot drag) and a drop target.
+  - Dual-split slot: the **slot number** is the whole-slot drag handle and whole-slot drop target. Each **A and B half** (including its waveform area) is a draggable handle and drop target for that specific side.
+- **Drag payload**: encoded in `dataTransfer` as JSON `{ index, side }` on `text/plain`, plus a marker MIME type (`application/x-sympakt-main-nonsplit`, `application/x-sympakt-main-split`, or `application/x-sympakt-half`) that lets drop targets validate compatibility during `dragover` (when the JSON payload itself can't be read for browser security reasons).
+- **Operations**:
+  - `main → main`: whole-slot **shift** via `bankState.moveSample()` (existing behavior, slots between source and target shift up/down).
+  - `main(non-split) ↔ half (A or B)`: **content swap**. The non-split slot keeps its config (lofi); only audio content is exchanged with the half. The split slot keeps its config and the other half.
+  - `half ↔ half` (same slot A↔B, or across slots): **content swap**. Each slot keeps its config; only audio content is exchanged. Loop is clamped to the destination's effective max if necessary.
+  - `main(split) → half`: **rejected** (a whole row can't merge into a half — use the slot-number area on the target for whole-slot moves).
+  - `half → main` of a **split** slot's slot-number: **rejected** (a half can't replace a whole row).
+- **A-side can be empty**: in dual mode, the A side can be flagged empty via the `aEmpty` boolean on the `Sample`. When `splitEnabled && aEmpty`, A's audio fields are reset to sentinel values (a 1-frame silent `AudioBuffer` via `createSentinelAudioBuffer()`, empty name, zero duration, no loop) and the UI renders a "Drop or click" empty zone for A. Helper `isASideEmpty(sample)` in [types/index.ts](src/types/index.ts) tests this. When both A and B become empty in a dual slot, `cleanupEmptyDual()` in [bank-state.ts](src/state/bank-state.ts) sets the slot to `null`. Dropping a file onto an `aEmpty` A side clears the flag and fills A normally (the existing `sample-import` event flow preserves `splitEnabled`/`splitSample` and the new sample's `aEmpty` is undefined → falsy).
+- **Empty-A round-trip**: `aEmpty` is persisted to IndexedDB (`StoredSample.aEmpty`) and to `sympakt.json` metadata (`SlotMetadata.aEmpty`). On ZIP export, empty A contributes silence to the WAV (the result buffer is initialised to zero and the A-processing block is skipped); the export filename uses `empty` as A's name (e.g. `10_empty-kick_DUAL.wav`); A's original file is not included in `originals/`. On import, when metadata marks A as empty, the decoded audio fields are overridden with sentinels and `aEmpty=true` is restored. Slots that are entirely empty (A empty AND no B) are skipped during export.
+- **Bank state method**: `bankState.swapSamples(fromIndex, fromSide, toIndex, toSide)` in [bank-state.ts](src/state/bank-state.ts) implements the swap. Helpers `extractContent()` and `applyContent()` extract a movable `SampleContent` subset (audio fields only) and re-apply it into a target slot's side, preserving slot config and recomputing `isTruncated` + clamping `loop` against the destination's effective max.
+- **Events** (dispatched from [sample-slot.ts](src/components/sample-slot.ts)):
+  - `sample-move` (detail: `{ from, to }`) — whole-slot shift (existing).
+  - `sample-swap` (detail: `{ fromIndex, fromSide, toIndex, toSide }`) — content swap.
+- **Visual feedback**: parent `.slot.drag-over` highlights when whole-slot drop is active; `.slot-number.drag-over` accents the number itself in split mode; `.split-half.drag-over` highlights the targeted half. `.dragging` class dims the source during the drag (applied to `.slot` for whole-slot drags, `.split-half` for half drags).
+- **Drag image**: by default the browser uses the drag-source element as the drag image. For split slots:
+  - The **slot-number** drag uses `setDragImage()` to substitute the entire `.slot` row so the drag ghost shows the whole row (matching non-split behavior).
+  - **Half** drags briefly add the `.drag-image` class to the `.split-half` (background + border + shadow) so the captured snapshot looks like a self-contained slot fragment. The class is removed on the next tick — by then the browser has already taken the snapshot.
+- **File and folder drops**: still handled per-area — dropping audio files onto a non-split slot body imports into that slot; dropping onto A or B half imports into that specific side (`sample-import` and `split-sample-import` events).
+
 ## Icons
 
 - All UI icons are inline SVGs defined in `src/icons.ts` using Lit `svg` tagged templates
