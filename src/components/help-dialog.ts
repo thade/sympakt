@@ -153,7 +153,7 @@ export class HelpDialog extends LitElement {
               <li><span class="accent">Loop</span> — enable looping with crossfade.</li>
               <li><span class="accent">LO</span> — cycle LOFI modes for longer samples.</li>
               <li><span class="accent">Click the name</span> — rename, reverse, edit, set pitch, or enable dual split.</li>
-              <li>Drag a slot to reorder it.</li>
+              <li>Drag a slot to reorder it. For dual slots, drag the <span class="accent">slot number</span> to move the whole row, or drag an <span class="accent">A or B half</span> to swap that side with another slot or half (across or within dual slots).</li>
             </ul>
 
             <h3>Loop Editing</h3>
@@ -193,7 +193,10 @@ export class HelpDialog extends LitElement {
             <h3>Virtual Keyboard</h3>
             <p>
               Press <kbd>P</kbd> or click the keyboard icon. Select a slot,
-              then play it at any pitch (2 octaves, root C3).
+              then play it at any pitch (2 octaves, root C3). For dual slots,
+              an <span class="accent">A | B</span> toggle in the keyboard bar
+              picks which side is played — press <kbd>Tab</kbd> for a quick
+              switch.
             </p>
 
             <h3>Export</h3>
@@ -211,6 +214,7 @@ export class HelpDialog extends LitElement {
               <li><kbd>A</kbd>–<kbd>L</kbd> / <kbd>W</kbd> <kbd>E</kbd> <kbd>T</kbd> <kbd>Y</kbd> <kbd>U</kbd> <kbd>O</kbd> — play notes</li>
               <li><kbd>←</kbd> <kbd>→</kbd> — shift keyboard octave</li>
               <li><kbd>↑</kbd> <kbd>↓</kbd> — previous / next sample</li>
+              <li><kbd>Tab</kbd> — switch A / B side on a dual slot</li>
             </ul>
 
             <h3>Settings</h3>

@@ -97,6 +97,40 @@ export class VirtualKeyboard extends LitElement {
         height: auto;
       }
 
+      .side-toggle {
+        display: inline-flex;
+        gap: 2px;
+        margin: 0 4px;
+      }
+
+      .side-btn {
+        font-family: var(--font-pixel);
+        font-size: 8px;
+        padding: 2px 8px;
+        min-width: 0;
+        height: auto;
+        border: 1px solid var(--border-color);
+        background: var(--bg-slot);
+        color: var(--text-secondary);
+        cursor: pointer;
+      }
+
+      .side-btn:hover:not(:disabled) {
+        background: var(--bg-slot-hover);
+        border-color: var(--border-hover);
+      }
+
+      .side-btn.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #000;
+      }
+
+      .side-btn:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+
       .piano-wrapper {
         display: flex;
         justify-content: center;
@@ -271,10 +305,43 @@ export class VirtualKeyboard extends LitElement {
   override render() {
     const sample = bankState.getSelectedSample();
     const selectedIndex = bankState.selectedIndex;
+    const storedSide = bankState.selectedSide;
+    const isSplit = !!sample?.splitEnabled;
+    const aAvailable = !!sample && !sample.aEmpty;
+    const bAvailable = !!sample?.splitSample;
+    // Effective side: if the stored side has no content, present the other side as active.
+    const effectiveSide: 'a' | 'b' = isSplit
+      ? (storedSide === 'b' && bAvailable ? 'b' : 'a')
+      : 'a';
+
+    let displayName = '';
+    if (sample) {
+      if (isSplit && effectiveSide === 'b' && sample.splitSample) {
+        displayName = sample.splitSample.name;
+      } else {
+        displayName = sample.name;
+      }
+    }
+    const sideTag = isSplit && sample ? ` (${effectiveSide.toUpperCase()})` : '';
 
     const nameHtml = selectedIndex !== null && sample
-      ? html`<span class="selected-label">Playing: <span class="selected-name">${String(selectedIndex + 1).padStart(2, '0')} ${sample.name}</span></span>`
+      ? html`<span class="selected-label">Playing: <span class="selected-name">${String(selectedIndex + 1).padStart(2, '0')} ${displayName}${sideTag}</span></span>`
       : html`<span class="selected-label">Select a sample to play</span>`;
+
+    const sideToggle = isSplit ? html`
+      <div class="side-toggle" title="Switch between A and B (Tab)">
+        <button
+          class="side-btn ${effectiveSide === 'a' ? 'active' : ''}"
+          ?disabled=${!aAvailable}
+          @click=${() => this.setSide('a')}
+        >A</button>
+        <button
+          class="side-btn ${effectiveSide === 'b' ? 'active' : ''}"
+          ?disabled=${!bAvailable}
+          @click=${() => this.setSide('b')}
+        >B</button>
+      </div>
+    ` : nothing;
 
     const canDown = this.startOctave > MIN_OCTAVE;
     const canUp = this.startOctave < MAX_OCTAVE - 1;
@@ -283,12 +350,19 @@ export class VirtualKeyboard extends LitElement {
     return html`
       <div class="keyboard-bar">
         ${nameHtml}
+        ${sideToggle}
         <button class="octave-btn" @click=${this.octaveDown} ?disabled=${!canDown}>${iconPlayPrev}</button>
         <span class="octave-label">${octaveLabel}</span>
         <button class="octave-btn" @click=${this.octaveUp} ?disabled=${!canUp}>${iconPlay}</button>
       </div>
       ${sample ? this.renderPiano() : html`<div class="no-sample">Click a sample slot to select it</div>`}
     `;
+  }
+
+  private setSide(side: 'a' | 'b'): void {
+    if (bankState.selectedSide === side) return;
+    this.stopAllNotes();
+    bankState.selectSide(side);
   }
 
   private renderPiano() {
@@ -413,6 +487,21 @@ export class VirtualKeyboard extends LitElement {
       this.octaveUp();
       return;
     }
+    if (key === 'tab') {
+      // Toggle A/B side when the selected slot is dual-split and the other
+      // side has content. No-op otherwise.
+      e.preventDefault();
+      const sample = bankState.getSelectedSample();
+      if (!sample?.splitEnabled) return;
+      const aAvailable = !sample.aEmpty;
+      const bAvailable = !!sample.splitSample;
+      const current = bankState.selectedSide === 'b' && bAvailable ? 'b' : 'a';
+      const target: 'a' | 'b' = current === 'a' ? 'b' : 'a';
+      const targetAvailable = target === 'a' ? aAvailable : bAvailable;
+      if (!targetAvailable) return;
+      this.setSide(target);
+      return;
+    }
 
     const noteIndex = QWERTY_TO_NOTE_INDEX[key];
     if (noteIndex !== undefined && !e.repeat) {
@@ -471,10 +560,10 @@ export class VirtualKeyboard extends LitElement {
 
   private noteOn(semitone: number): void {
     if (this.activeKeys.has(semitone)) return;
-    const sample = bankState.getSelectedSample();
-    if (!sample) return;
+    const audio = bankState.getSelectedAudio();
+    if (!audio) return;
     window.dispatchEvent(new Event('stop-all-playback'));
-    const stop = playSamplePitchedFull(sample, semitone);
+    const stop = playSamplePitchedFull(audio, semitone);
     this.stopFns.set(semitone, stop);
     this.activeKeys = new Set(this.activeKeys).add(semitone);
   }

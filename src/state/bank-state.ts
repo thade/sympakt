@@ -206,15 +206,35 @@ class BankStateStore {
   private listeners = new Set<BankListener>();
   private saveTimer?: ReturnType<typeof setTimeout>;
   private _selectedIndex: number | null = null;
+  private _selectedSide: 'a' | 'b' = 'a';
 
   /** Get the currently selected slot index */
   get selectedIndex(): number | null {
     return this._selectedIndex;
   }
 
-  /** Select a slot (null to deselect) */
+  /** Side selected for keyboard preview when the selected slot is dual-split */
+  get selectedSide(): 'a' | 'b' {
+    return this._selectedSide;
+  }
+
+  /** Select a slot (null to deselect). Resets selectedSide to 'a'. */
   selectSlot(index: number | null): void {
     this._selectedIndex = index;
+    this._selectedSide = 'a';
+    this.notifyOnly();
+  }
+
+  /** Set which side (A or B) of a dual-split slot is targeted by keyboard preview */
+  selectSide(side: 'a' | 'b'): void {
+    if (this._selectedSide === side) return;
+    this._selectedSide = side;
+    this.notifyOnly();
+  }
+
+  /** Toggle the selected side between A and B */
+  toggleSelectedSide(): void {
+    this._selectedSide = this._selectedSide === 'a' ? 'b' : 'a';
     this.notifyOnly();
   }
 
@@ -222,6 +242,41 @@ class BankStateStore {
   getSelectedSample(): Sample | null {
     if (this._selectedIndex === null) return null;
     return this.slots[this._selectedIndex] ?? null;
+  }
+
+  /**
+   * Get the audio data (buffer, loop, lofi, duration) for the currently selected
+   * side of the selected slot. Returns null when nothing is playable on that side
+   * (e.g., A is empty in dual mode, or B isn't set).
+   * If B is selected but missing, falls back to A when available.
+   */
+  getSelectedAudio(): {
+    audioBuffer: AudioBuffer;
+    loop: LoopSettings | null;
+    lofi: LofiMode;
+    duration: number;
+  } | null {
+    const sample = this.getSelectedSample();
+    if (!sample) return null;
+    if (sample.splitEnabled && this._selectedSide === 'b') {
+      const b = sample.splitSample;
+      if (b) {
+        return {
+          audioBuffer: b.audioBuffer,
+          loop: b.loop,
+          lofi: sample.lofi,
+          duration: b.duration,
+        };
+      }
+      // B selected but missing — fall through to A if available
+    }
+    if (sample.splitEnabled && sample.aEmpty) return null;
+    return {
+      audioBuffer: sample.audioBuffer,
+      loop: sample.loop,
+      lofi: sample.lofi,
+      duration: sample.duration,
+    };
   }
 
   /** Get a snapshot of all slots */

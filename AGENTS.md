@@ -324,9 +324,12 @@ Every slot supports three kinds of drag interactions: file import (drop external
 - **Visual feedback**: pressed keys get `.active` class (accent color for white keys, accent-dim for black keys).
 - **Responsive**: white key width scales from 42px (desktop) → 32px (≤768px) → 24px (≤480px). Black key width is computed as 67% of white key width. Key binding labels hidden on mobile.
 - **State**: `BankStateStore.selectedIndex` (not persisted) tracks which slot is selected. `BankStateStore.selectSlot()` / `getSelectedSample()` provide the API.
+- **A/B side selection (dual-split slots)**: when the selected sample is dual-split, the keyboard bar shows an `A | B` toggle next to the "Playing:" label. The active side is highlighted; an unavailable side (A empty or B missing) is disabled. The selected side is stored on `BankStateStore.selectedSide` (default `'a'`, not persisted, reset to `'a'` whenever a different slot is selected). The `"Playing:"` label shows the B name when B is active. `bankState.getSelectedAudio()` returns the right `{ audioBuffer, loop, lofi, duration }` tuple for the active side (using the slot's `lofi`, since lofi is per-slot), with a fallback to A when B is selected but missing. `playSamplePitchedFull()` accepts this minimal-shape object, so no API change there.
+- **Tab key**: pressing `Tab` while the keyboard is open toggles the A/B side for the currently selected slot (no-op when the slot isn't split or the other side is unavailable). `preventDefault()` is called to suppress the browser's focus navigation.
 
 ## Documentation Maintenance
 
-- When features are added or updated, **always update both `README.md` and `AGENTS.md`** to reflect the changes.
+- When features are added or updated, **always update `README.md`, `AGENTS.md`, AND the in-app help** ([src/components/help-dialog.ts](src/components/help-dialog.ts)) to reflect the changes.
 - `README.md` is user-facing: update features list, usage instructions, and export format notes.
 - `AGENTS.md` is agent-facing: update constraints, processing notes, and add dedicated sections for new features with implementation details.
+- `help-dialog.ts` is the **in-app help** users see when clicking the `?` button: review every change against it and update the relevant sections (Slot Controls, Dual Split, Virtual Keyboard, Shortcuts, etc.) when behavior changes. Keep it concise — it's a user-facing quick reference, not a manual.

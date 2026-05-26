@@ -57,7 +57,7 @@ Create, preview, and export 64-slot sample banks for the [Elektron Syntakt](http
   - Toggle between centered and full-screen layout with the expand button
 - **Import a pack** — click **Import .zip** to load a previously exported sample pack
 - **Export** — click **Export .zip**, set a pack name, toggle normalization, and optionally include original files
-- **Virtual keyboard** — press **P** or click the keyboard icon to show a 2-octave piano; click a sample slot to select it, then play it chromatically using the on-screen keys or QWERTY shortcuts (A–J for white keys, W/E/T/Y/U for sharps). Use **←/→** to shift the octave range and **↑/↓** to switch between samples
+- **Virtual keyboard** — press **P** or click the keyboard icon to show a 2-octave piano; click a sample slot to select it, then play it chromatically using the on-screen keys or QWERTY shortcuts (A–J for white keys, W/E/T/Y/U for sharps). Use **←/→** to shift the octave range and **↑/↓** to switch between samples. For dual-split slots, an **A | B** toggle appears in the keyboard bar — click it or press **Tab** to switch which side is played.
 - **Max columns** — open **Settings** (gear icon) to adjust the max number of columns in the bank grid (1–4). The layout remains responsive within the chosen limit.
 - **Alternate colors** — enable in **Settings** to switch to a colorblind-friendly blue/yellow/pink palette.
 
