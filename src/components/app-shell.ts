@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { theme, sharedStyles, applyColorblindTheme } from '../styles/theme.js';
-import { iconHeart, iconGear, iconKeyboard, iconMenu } from '../icons.js';
+import { iconHeart, iconGear, iconHelp, iconKeyboard, iconMenu } from '../icons.js';
 import { bankState, BankStateController } from '../state/bank-state.js';
 import {
   exportSamplePack,
@@ -17,6 +17,7 @@ import { zipSync } from 'fflate';
 import './sample-bank.js';
 import './export-dialog.js';
 import './settings-dialog.js';
+import './help-dialog.js';
 import './virtual-keyboard.js';
 import './sample-editor.js';
 import type { SampleEditor } from './sample-editor.js';
@@ -267,6 +268,7 @@ export class AppShell extends LitElement {
   @state() private headerDragOver = false;
   @state() private pitchDebugMode = false;
   @state() private settingsDialogOpen = false;
+  @state() private helpDialogOpen = false;
   @state() private pitchDetectionEnabled = false;
   @state() private keyboardOpen = false;
   @state() private maxColumns = 4;
@@ -340,6 +342,7 @@ export class AppShell extends LitElement {
         <div class="toolbar">
           <span class="slot-count" title="Filled slots out of 64">${filledSlots}/64</span>
           ${this.pitchDebugMode ? html`<span class="debug-badge" title="Pitch debug mode enabled">DBG</span>` : nothing}
+          <button class="btn-settings" @click=${this.onOpenHelp} title="Help">${iconHelp}</button>
           <button class="btn-settings" @click=${this.onOpenSettings} title="Settings">${iconGear}</button>
           <button class="btn-keyboard ${this.keyboardOpen ? 'active' : ''}" @click=${this.onToggleKeyboard} title="Virtual keyboard (P)">${iconKeyboard}</button>
           <button
@@ -419,6 +422,11 @@ export class AppShell extends LitElement {
         @dialog-close=${() => (this.exportDialogOpen = false)}
         @export-confirm=${this.onExportConfirm}
       ></sp-export-dialog>
+
+      <sp-help-dialog
+        ?open=${this.helpDialogOpen}
+        @dialog-close=${() => (this.helpDialogOpen = false)}
+      ></sp-help-dialog>
 
       <sp-settings-dialog
         ?open=${this.settingsDialogOpen}
@@ -588,6 +596,10 @@ export class AppShell extends LitElement {
       this.exportNormalize = true;
       this.showNotification('All slots cleared');
     }
+  }
+
+  private onOpenHelp(): void {
+    this.helpDialogOpen = true;
   }
 
   private onOpenSettings(): void {

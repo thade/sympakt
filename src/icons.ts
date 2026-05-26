@@ -113,6 +113,13 @@ export const iconContract = icon(svg`
   <line x1="10" y1="14" x2="3" y2="21" />
 `);
 
+/** Question mark / help */
+export const iconHelp = icon(svg`
+  <circle cx="12" cy="12" r="10" fill="none" />
+  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+  <line x1="12" y1="17" x2="12.01" y2="17" stroke-width="3" />
+`, 10);
+
 /** Heart (filled, pixel art) */
 export const iconHeart = svg`
   <svg xmlns="http://www.w3.org/2000/svg" width="9" height="9" viewBox="0 0 9 9"
