@@ -10,7 +10,7 @@ import {
 } from '../services/zip-service.js';
 import { loadSettings, saveSettings } from '../services/persistence.js';
 import type { ExportOptions, Sample, SplitSample } from '../types/index.js';
-import { MAX_SLOTS } from '../types/index.js';
+import { MAX_SLOTS, getSplitMaxDuration } from '../types/index.js';
 import { detectPitchWithDebug } from '../services/audio-engine.js';
 import { encodeWav } from '../services/wav-encoder.js';
 import { zipSync } from 'fflate';
@@ -806,6 +806,7 @@ export class AppShell extends LitElement {
 
   private onEditorExportSlicesToSlots(e: CustomEvent<{
     slotIndex: number;
+    packDual?: boolean;
     slices: Array<{
       audioBuffer: AudioBuffer;
       waveformData: number[];
@@ -813,7 +814,56 @@ export class AppShell extends LitElement {
       name: string;
     }>;
   }>): void {
-    const { slotIndex, slices } = e.detail;
+    const { slotIndex, slices, packDual } = e.detail;
+
+    if (packDual) {
+      // Each dual slot holds two slices: A = slice[2k], B = slice[2k+1]
+      const splitMax = getSplitMaxDuration('off');
+      let written = 0;
+      for (let pair = 0; pair * 2 < slices.length; pair++) {
+        const targetSlot = slotIndex + pair;
+        if (targetSlot >= MAX_SLOTS) break;
+        const aSlice = slices[pair * 2];
+        const bSlice = slices[pair * 2 + 1]; // may be undefined for the last odd slice
+
+        const aTruncated = aSlice.duration > splitMax;
+        const splitSample: SplitSample | null = bSlice
+          ? {
+              name: bSlice.name,
+              originalFileName: `${bSlice.name}.wav`,
+              audioBuffer: bSlice.audioBuffer,
+              waveformData: bSlice.waveformData,
+              duration: bSlice.duration,
+              isTruncated: bSlice.duration > splitMax,
+              originalFile: new Uint8Array(0),
+              loop: null,
+              detectedNote: null,
+            }
+          : null;
+
+        const sample: Sample = {
+          id: crypto.randomUUID(),
+          name: aSlice.name,
+          originalFileName: `${aSlice.name}.wav`,
+          audioBuffer: aSlice.audioBuffer,
+          waveformData: aSlice.waveformData,
+          duration: aSlice.duration,
+          isTruncated: aTruncated,
+          originalFile: new Uint8Array(0),
+          loop: null,
+          lofi: 'off',
+          detectedNote: null,
+          splitEnabled: true,
+          splitSample,
+        };
+        bankState.setSample(targetSlot, sample);
+        written += bSlice ? 2 : 1;
+      }
+
+      this.editorOpen = false;
+      this.showNotification(`${written} slices packed into ${Math.ceil(written / 2)} dual slot${Math.ceil(written / 2) > 1 ? 's' : ''}`);
+      return;
+    }
 
     for (let i = 0; i < slices.length; i++) {
       const targetSlot = slotIndex + i;

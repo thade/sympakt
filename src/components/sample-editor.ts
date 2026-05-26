@@ -387,12 +387,17 @@ export class SampleEditor extends LitElement {
         margin-top: 10px;
         padding-top: 10px;
         border-top: 1px solid var(--border-color);
+        align-items: center;
       }
 
       .slicer-actions button {
         display: inline-flex;
         align-items: center;
         gap: 5px;
+      }
+
+      .slicer-pack-dual {
+        margin-top: 8px;
       }
 
       .editor-footer {
@@ -521,6 +526,8 @@ export class SampleEditor extends LitElement {
   @state() private slicerSensitivity = 0.5;
   @state() private slicerCount = 4;
   @state() private sliceMarkers: number[] = [];
+  /** When true, "To Slots" packs every two slices into a single dual-split slot (A|B) to halve the slot footprint. */
+  @state() private slicePackDual = false;
   @state() private isPlaying = false;
   @state() private isProcessing = false;
   @state() private dragTarget: DragTarget = null;
@@ -602,6 +609,7 @@ export class SampleEditor extends LitElement {
     this.activeSection = 'utility';
     this.slicerSensitivity = 0.5;
     this.slicerCount = 4;
+    this.slicePackDual = false;
     this.isPlaying = false;
     this.isProcessing = false;
     this.showCloseConfirm = false;
@@ -1147,8 +1155,11 @@ export class SampleEditor extends LitElement {
 
   private onExportSlicesToSlots(): void {
     if (!this.sample || this.getSliceCount() < 2) return;
+    const sliceCount = this.getSliceCount();
+    // When packing as dual slots, each slot holds two slices, so we need half as many slots.
+    const slotsNeeded = this.slicePackDual ? Math.ceil(sliceCount / 2) : sliceCount;
     this.dispatchEvent(new CustomEvent('editor-check-slots', {
-      detail: { slotIndex: this.slotIndex, sliceCount: this.getSliceCount() },
+      detail: { slotIndex: this.slotIndex, sliceCount: slotsNeeded },
       bubbles: true, composed: true,
     }));
   }
@@ -1169,6 +1180,7 @@ export class SampleEditor extends LitElement {
       this.dispatchEvent(new CustomEvent('editor-export-slices-to-slots', {
         detail: {
           slotIndex: this.slotIndex,
+          packDual: this.slicePackDual,
           slices: slices.map((buf, i) => ({
             audioBuffer: buf,
             waveformData: generateWaveformData(buf, WAVEFORM_COLUMNS),
@@ -1391,13 +1403,23 @@ export class SampleEditor extends LitElement {
                 ${this.slicerMode !== 'off' && sliceCount >= 2 ? html`
                   <div class="slicer-actions">
                     <button @click=${this.onExportSlicesToSlots} ?disabled=${this.isProcessing}
-                      title="Export slices to bank slots starting from slot ${this.slotIndex + 1}">
+                      title="Export slices to bank slots starting from slot ${this.slotIndex + 1}${this.slicePackDual ? ' (paired as A|B in dual slots)' : ''}">
                       ${iconGrid} To Slots
                     </button>
                     <button @click=${this.onExportSlicesZip} ?disabled=${this.isProcessing}
                       title="Download slices as individual WAV files in a ZIP">
                       ${iconDownload} Download ZIP
                     </button>
+                  </div>
+                  <div class="checkbox-field slicer-pack-dual"
+                    title="Pack each pair of slices into one dual-split slot (A|B) to use half as many bank slots">
+                    <input
+                      type="checkbox"
+                      id="ed-pack-dual"
+                      .checked=${this.slicePackDual}
+                      @change=${(e: Event) => { this.slicePackDual = (e.target as HTMLInputElement).checked; }}
+                    />
+                    <label for="ed-pack-dual">Pack in dual slots</label>
                   </div>
                 ` : nothing}
               </div>

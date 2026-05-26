@@ -169,7 +169,9 @@ export class HelpDialog extends LitElement {
               Name menu → <span class="accent">Edit Sample</span>. Destructive
               edits: trim, reverse, normalize, fade, gain, bitcrush, filter.
               The slicer splits a sample by transient, even divisions, or
-              manual markers — to slots or as a ZIP.
+              manual markers — to slots or as a ZIP. Enable
+              <span class="accent">Pack in dual slots</span> to send pairs of slices
+              into dual-split slots and halve the bank footprint.
             </p>
 
             <h3>LOFI Modes</h3>

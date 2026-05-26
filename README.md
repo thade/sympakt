@@ -52,7 +52,7 @@ Create, preview, and export 64-slot sample banks for the [Elektron Syntakt](http
   - **Fade in/out** — drag the blue flag handles to add linear fades, with real-time waveform visualization
   - **Utility** — reverse, peak-normalize, and gain adjustment (waveform updates live)
   - **FX** — sample rate reduction (lo-fi crunch), bit depth reduction, and LP/HP/BP filter with adjustable cutoff and resonance
-  - **Slicer** — split samples using transient detection, even spacing (powers of 2), or manual click-to-place markers. Preview individual slices with ◀/▶ navigation. Export slices to bank slots or download as a ZIP
+  - **Slicer** — split samples using transient detection, even spacing (powers of 2), or manual click-to-place markers. Preview individual slices with ◀/▶ navigation. Export slices to bank slots (optionally packed two-per-slot as dual A|B to halve the slot footprint) or download as a ZIP
   - Click **Apply** to save changes (editor stays open for further edits) or **Close** to exit (confirms if unapplied changes exist)
   - Toggle between centered and full-screen layout with the expand button
 - **Import a pack** — click **Import .zip** to load a previously exported sample pack
