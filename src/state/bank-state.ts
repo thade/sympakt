@@ -94,11 +94,16 @@ function clampLoop(
   };
 }
 
-/** Apply movable content into a slot at the given side, preserving slot config (lofi, splitEnabled) */
+/** Apply movable content into a slot at the given side, preserving slot config (lofi, splitEnabled).
+ *  `sourceLofi` is used as the lofi of a freshly created non-split slot (when `slot` is null);
+ *  it lets per-half drops onto an empty target preserve the source's lofi mode so its loop
+ *  isn't unexpectedly clamped against a fresh 'off' max.
+ */
 function applyContent(
   slot: Sample | null,
   side: SwapSide,
   content: SampleContent | null,
+  sourceLofi: LofiMode = 'off',
 ): Sample | null {
   if (side === 'main' || side === 'a') {
     if (!content) {
@@ -145,8 +150,11 @@ function applyContent(
         aEmpty: false,
       };
     }
-    // New non-split slot from content
-    const isTruncated = content.duration > getEffectiveMaxDuration('off');
+    // New non-split slot from content — inherit lofi from the source so its loop length
+    // and pitching expectations carry over.
+    const effectiveMax = getEffectiveMaxDuration(sourceLofi);
+    const isTruncated = content.duration > effectiveMax;
+    const loop = clampLoop(content.loop, content.audioBuffer.duration, effectiveMax);
     return {
       id: crypto.randomUUID(),
       name: content.name,
@@ -156,8 +164,8 @@ function applyContent(
       duration: content.duration,
       isTruncated,
       originalFile: content.originalFile,
-      loop: content.loop,
-      lofi: 'off',
+      loop,
+      lofi: sourceLofi,
       detectedNote: content.detectedNote,
       pitchDebug: content.pitchDebug,
       reversed: content.reversed,
@@ -332,6 +340,37 @@ class BankStateStore {
     const sample = this.slots[index];
     if (!sample) return;
     const splitEnabled = !sample.splitEnabled;
+
+    // Special case: disabling dual mode while A is empty.
+    // Promote B to the new main Sample if it exists; otherwise the slot is empty.
+    if (!splitEnabled && sample.aEmpty) {
+      const b = sample.splitSample;
+      if (!b) {
+        this.slots[index] = null;
+      } else {
+        const effectiveMax = getEffectiveMaxDuration(sample.lofi);
+        const isTruncated = b.duration > effectiveMax;
+        const loop = clampLoop(b.loop, b.audioBuffer.duration, effectiveMax);
+        this.slots[index] = {
+          id: crypto.randomUUID(),
+          name: b.name,
+          originalFileName: b.originalFileName,
+          audioBuffer: b.audioBuffer,
+          waveformData: b.waveformData,
+          duration: b.duration,
+          isTruncated,
+          originalFile: b.originalFile,
+          loop,
+          lofi: sample.lofi,
+          detectedNote: b.detectedNote,
+          pitchDebug: b.pitchDebug,
+          reversed: b.reversed,
+        };
+      }
+      this.notify();
+      return;
+    }
+
     const splitMaxDur = getSplitMaxDuration(sample.lofi);
 
     // Recalculate A sample truncation based on split max
@@ -602,14 +641,20 @@ class BankStateStore {
     const fromContent = extractContent(fromSlot!, fromSide);
     const toContent = toSlot ? extractContent(toSlot, toSide) : null;
 
+    // Carry the source slot's lofi so a brand-new destination slot (created
+    // when dropping content into an empty slot) inherits a sensible playback
+    // mode instead of always falling back to 'off'.
+    const fromLofi = fromSlot!.lofi;
+    const toLofi = toSlot?.lofi ?? 'off';
+
     if (fromIndex === toIndex) {
-      // Same slot: apply both swaps sequentially
+      // Same slot: apply both swaps sequentially (no new-slot creation path hit)
       let updated = applyContent(fromSlot, fromSide, toContent);
       updated = applyContent(updated, toSide, fromContent);
       this.slots[fromIndex] = cleanupEmptyDual(updated);
     } else {
-      this.slots[fromIndex] = cleanupEmptyDual(applyContent(fromSlot, fromSide, toContent));
-      this.slots[toIndex] = cleanupEmptyDual(applyContent(toSlot, toSide, fromContent));
+      this.slots[fromIndex] = cleanupEmptyDual(applyContent(fromSlot, fromSide, toContent, toLofi));
+      this.slots[toIndex] = cleanupEmptyDual(applyContent(toSlot, toSide, fromContent, fromLofi));
     }
     this.notify();
   }

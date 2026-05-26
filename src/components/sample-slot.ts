@@ -468,6 +468,24 @@ export class SampleSlot extends LitElement {
   private playTimerB?: ReturnType<typeof setTimeout>;
   private outsideClickHandler = this.onOutsideClick.bind(this);
   private stopAllHandler = this.onStopAll.bind(this);
+  // Global safety net: a cancelled HTML5 drag (e.g. Escape key, drop outside any
+  // valid zone) doesn't always fire `dragleave` on the last hovered drop target,
+  // which would otherwise leave a slot stuck in the `drag-over` state. Reset all
+  // drag visuals whenever any drag ends or drops anywhere in the document.
+  private globalDragEndHandler = (): void => {
+    if (
+      this.dragging || this.draggingA || this.draggingB ||
+      this.dragOver || this.dragOverA || this.dragOverB || this.dragOverNumber
+    ) {
+      this.dragging = false;
+      this.draggingA = false;
+      this.draggingB = false;
+      this.dragOver = false;
+      this.dragOverA = false;
+      this.dragOverB = false;
+      this.dragOverNumber = false;
+    }
+  };
 
   private fileInput?: HTMLInputElement;
   private fileInputB?: HTMLInputElement;
@@ -475,11 +493,15 @@ export class SampleSlot extends LitElement {
   override connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener('stop-all-playback', this.stopAllHandler);
+    window.addEventListener('dragend', this.globalDragEndHandler);
+    window.addEventListener('drop', this.globalDragEndHandler);
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener('stop-all-playback', this.stopAllHandler);
+    window.removeEventListener('dragend', this.globalDragEndHandler);
+    window.removeEventListener('drop', this.globalDragEndHandler);
     document.removeEventListener('click', this.outsideClickHandler);
   }
 
@@ -943,6 +965,10 @@ export class SampleSlot extends LitElement {
 
   private renderSplitMenu(side: 'a' | 'b' = 'a') {
     const loop = side === 'b' ? this.sample?.splitSample?.loop : this.sample?.loop;
+    const aEmpty = !!this.sample?.aEmpty;
+    // The "disable dual" option lives on A by default; when A is empty (no menu accessible there)
+    // it falls back to B so the user can still exit dual mode without removing the slot.
+    const showDisableDual = side === 'a' || (side === 'b' && aEmpty);
     return html`
       <div class="sample-menu" @click=${(e: Event) => e.stopPropagation()}>
         <button class="menu-item" @click=${() => this.startRename(side)}>
@@ -959,7 +985,7 @@ export class SampleSlot extends LitElement {
         <button class="menu-item" @click=${() => this.onEditSample(side === 'b' ? 'b' : 'a')}>
           EDIT SAMPLE
         </button>
-        ${side === 'a' ? html`
+        ${showDisableDual ? html`
           <button class="menu-item" @click=${this.onToggleSplit}>
             DISABLE DUAL SAMPLE
           </button>
@@ -1414,153 +1440,100 @@ export class SampleSlot extends LitElement {
   //   3. Main drag from a non-split slot → content swap
   // Main drag from a split slot is rejected (use the slot-number drop area instead).
 
-  private onDragOverA(e: DragEvent): void {
+  /** Returns the kind of incoming drag for a half drop-target. */
+  private static halfDragKind(e: DragEvent): 'file' | 'sympakt' | null {
     const types = e.dataTransfer?.types;
-    if (!types) return;
-    if (types.includes('Files')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.dataTransfer!.dropEffect = 'copy';
-      this.dragOverA = true;
-      return;
-    }
-    if (types.includes(MT_HALF) || types.includes(MT_MAIN_NONSPLIT)) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.dataTransfer!.dropEffect = 'move';
-      this.dragOverA = true;
-    }
+    if (!types) return null;
+    if (types.includes('Files')) return 'file';
+    if (types.includes(MT_HALF) || types.includes(MT_MAIN_NONSPLIT)) return 'sympakt';
+    return null;
   }
 
-  private onDragLeaveA(e: DragEvent): void {
-    if (!this.dragOverA) return;
-    e.stopPropagation();
-    this.dragOverA = false;
-  }
-
-  private onDropA(e: DragEvent): void {
-    const types = e.dataTransfer?.types;
-    if (!types) return;
-    const isFile = types.includes('Files');
-    const isSympakt = types.includes(MT_HALF) || types.includes(MT_MAIN_NONSPLIT);
-    if (!isFile && !isSympakt) return;
+  private onHalfDragOver(side: 'a' | 'b', e: DragEvent): void {
+    const kind = SampleSlot.halfDragKind(e);
+    if (!kind) return;
     e.preventDefault();
     e.stopPropagation();
-    this.dragOverA = false;
+    e.dataTransfer!.dropEffect = kind === 'file' ? 'copy' : 'move';
+    if (side === 'a') this.dragOverA = true;
+    else this.dragOverB = true;
+  }
 
-    if (isFile) {
+  private onHalfDragLeave(side: 'a' | 'b', e: DragEvent): void {
+    const flag = side === 'a' ? this.dragOverA : this.dragOverB;
+    if (!flag) return;
+    e.stopPropagation();
+    if (side === 'a') this.dragOverA = false;
+    else this.dragOverB = false;
+  }
+
+  private onHalfDrop(side: 'a' | 'b', e: DragEvent): void {
+    const kind = SampleSlot.halfDragKind(e);
+    if (!kind) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (side === 'a') this.dragOverA = false;
+    else this.dragOverB = false;
+
+    if (kind === 'file') {
       const files = e.dataTransfer!.files;
-      if (files && files.length > 0) {
-        const audioFile = Array.from(files).find(
-          (f) => f.type.startsWith('audio/') || f.name.match(/\.(wav|mp3|ogg|flac|aiff|m4a)$/i),
-        );
-        if (audioFile) {
-          this.dispatchEvent(
-            new CustomEvent('sample-import', {
-              detail: { index: this.index, file: audioFile },
-              bubbles: true,
-              composed: true,
-            }),
-          );
-        }
-      }
+      if (!files || files.length === 0) return;
+      const audioFile = Array.from(files).find(
+        (f) => f.type.startsWith('audio/') || AUDIO_EXT_RE.test(f.name),
+      );
+      if (!audioFile) return;
+      this.dispatchEvent(
+        new CustomEvent(side === 'a' ? 'sample-import' : 'split-sample-import', {
+          detail: { index: this.index, file: audioFile },
+          bubbles: true,
+          composed: true,
+        }),
+      );
       return;
     }
 
     const payload = SampleSlot.getDragPayload(e);
-    if (payload) this.dispatchSwap(payload, 'a');
+    if (payload) this.dispatchSwap(payload, side);
   }
 
-  private onDragOverB(e: DragEvent): void {
-    const types = e.dataTransfer?.types;
-    if (!types) return;
-    if (types.includes('Files')) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.dataTransfer!.dropEffect = 'copy';
-      this.dragOverB = true;
-      return;
-    }
-    if (types.includes(MT_HALF) || types.includes(MT_MAIN_NONSPLIT)) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.dataTransfer!.dropEffect = 'move';
-      this.dragOverB = true;
-    }
-  }
-
-  private onDragLeaveB(e: DragEvent): void {
-    if (!this.dragOverB) return;
-    e.stopPropagation();
-    this.dragOverB = false;
-  }
-
-  private onDropB(e: DragEvent): void {
-    const types = e.dataTransfer?.types;
-    if (!types) return;
-    const isFile = types.includes('Files');
-    const isSympakt = types.includes(MT_HALF) || types.includes(MT_MAIN_NONSPLIT);
-    if (!isFile && !isSympakt) return;
-    e.preventDefault();
-    e.stopPropagation();
-    this.dragOverB = false;
-
-    if (isFile) {
-      const files = e.dataTransfer!.files;
-      if (files && files.length > 0) {
-        const audioFile = Array.from(files).find(
-          (f) => f.type.startsWith('audio/') || f.name.match(/\.(wav|mp3|ogg|flac|aiff|m4a)$/i),
-        );
-        if (audioFile) {
-          this.dispatchEvent(
-            new CustomEvent('split-sample-import', {
-              detail: { index: this.index, file: audioFile },
-              bubbles: true,
-              composed: true,
-            }),
-          );
-        }
+  private onHalfDragStart(side: 'a' | 'b', e: DragEvent): void {
+    // Refuse to initiate a drag from an empty / non-applicable half.
+    if (side === 'a') {
+      if (!this.sample?.splitEnabled || this.sample.aEmpty) {
+        e.preventDefault();
+        return;
       }
-      return;
-    }
-
-    const payload = SampleSlot.getDragPayload(e);
-    if (payload) this.dispatchSwap(payload, 'b');
-  }
-
-  // --- Half drag sources (A / B in split mode) ---
-
-  private onHalfDragStartA(e: DragEvent): void {
-    if (!this.sample?.splitEnabled || this.sample.aEmpty) {
-      e.preventDefault();
-      return;
+    } else {
+      if (!this.sample?.splitSample) {
+        e.preventDefault();
+        return;
+      }
     }
     e.stopPropagation();
     this.setHalfDragImage(e, e.currentTarget as HTMLElement);
-    this.draggingA = true;
-    this.setDragData(e, 'a');
+    if (side === 'a') this.draggingA = true;
+    else this.draggingB = true;
+    this.setDragData(e, side);
   }
 
-  private onHalfDragEndA(e: DragEvent): void {
+  private onHalfDragEnd(side: 'a' | 'b', e: DragEvent): void {
     e.stopPropagation();
-    this.draggingA = false;
+    if (side === 'a') this.draggingA = false;
+    else this.draggingB = false;
   }
 
-  private onHalfDragStartB(e: DragEvent): void {
-    if (!this.sample?.splitSample) {
-      e.preventDefault();
-      return;
-    }
-    e.stopPropagation();
-    this.setHalfDragImage(e, e.currentTarget as HTMLElement);
-    this.draggingB = true;
-    this.setDragData(e, 'b');
-  }
-
-  private onHalfDragEndB(e: DragEvent): void {
-    e.stopPropagation();
-    this.draggingB = false;
-  }
+  // Stable arrow-function wrappers so Lit's `class=` event bindings don't see a
+  // new listener reference on each render.
+  private onDragOverA = (e: DragEvent) => this.onHalfDragOver('a', e);
+  private onDragOverB = (e: DragEvent) => this.onHalfDragOver('b', e);
+  private onDragLeaveA = (e: DragEvent) => this.onHalfDragLeave('a', e);
+  private onDragLeaveB = (e: DragEvent) => this.onHalfDragLeave('b', e);
+  private onDropA = (e: DragEvent) => this.onHalfDrop('a', e);
+  private onDropB = (e: DragEvent) => this.onHalfDrop('b', e);
+  private onHalfDragStartA = (e: DragEvent) => this.onHalfDragStart('a', e);
+  private onHalfDragStartB = (e: DragEvent) => this.onHalfDragStart('b', e);
+  private onHalfDragEndA = (e: DragEvent) => this.onHalfDragEnd('a', e);
+  private onHalfDragEndB = (e: DragEvent) => this.onHalfDragEnd('b', e);
 
   // --- Slot-number (whole-slot handle in split mode) ---
 
@@ -1692,7 +1665,7 @@ export class SampleSlot extends LitElement {
     const files = e.dataTransfer?.files;
     if (files && files.length > 0) {
       const audioFiles = Array.from(files).filter(
-        (f) => f.type.startsWith('audio/') || f.name.match(/\.(wav|mp3|ogg|flac|aiff|m4a)$/i),
+        (f) => f.type.startsWith('audio/') || AUDIO_EXT_RE.test(f.name),
       );
       if (audioFiles.length > 1) {
         // Multiple audio files dropped — treat as batch
