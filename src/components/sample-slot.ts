@@ -452,12 +452,12 @@ export class SampleSlot extends LitElement {
     return html`
       <div
         class=${cls}
-        draggable=${this.sample && !isSplit ? 'true' : 'false'}
-        @dragstart=${isSplit ? undefined : this.onDragStart}
-        @dragend=${isSplit ? undefined : this.onDragEnd}
-        @dragover=${isSplit ? undefined : this.onDragOver}
-        @dragleave=${isSplit ? undefined : this.onDragLeave}
-        @drop=${isSplit ? undefined : this.onDrop}
+        draggable=${this.sample ? 'true' : 'false'}
+        @dragstart=${this.onDragStart}
+        @dragend=${this.onDragEnd}
+        @dragover=${this.onDragOver}
+        @dragleave=${this.onDragLeave}
+        @drop=${this.onDrop}
         @click=${this.onSlotClick}
         @contextmenu=${this.sample ? this.onContextMenu : undefined}
       >
@@ -1332,28 +1332,30 @@ export class SampleSlot extends LitElement {
   }
 
   // --- Split-mode Drag & Drop (per-half) ---
+  // Only handle file drops here. Reorder drags (no Files type) bubble up
+  // to the parent slot so dual-split slots can be reordered like any other.
 
   private onDragOverA(e: DragEvent): void {
+    if (!e.dataTransfer?.types.includes('Files')) return;
     e.preventDefault();
     e.stopPropagation();
-    // Only accept file drops, not reorder drags
-    if (e.dataTransfer?.types.includes('Files')) {
-      e.dataTransfer.dropEffect = 'copy';
-      this.dragOverA = true;
-    }
+    e.dataTransfer.dropEffect = 'copy';
+    this.dragOverA = true;
   }
 
   private onDragLeaveA(e: DragEvent): void {
+    if (!this.dragOverA) return;
     e.stopPropagation();
     this.dragOverA = false;
   }
 
   private onDropA(e: DragEvent): void {
+    if (!e.dataTransfer?.types.includes('Files')) return;
     e.preventDefault();
     e.stopPropagation();
     this.dragOverA = false;
 
-    const files = e.dataTransfer?.files;
+    const files = e.dataTransfer.files;
     if (files && files.length > 0) {
       const audioFile = Array.from(files).find(
         (f) => f.type.startsWith('audio/') || f.name.match(/\.(wav|mp3|ogg|flac|aiff|m4a)$/i),
@@ -1371,25 +1373,26 @@ export class SampleSlot extends LitElement {
   }
 
   private onDragOverB(e: DragEvent): void {
+    if (!e.dataTransfer?.types.includes('Files')) return;
     e.preventDefault();
     e.stopPropagation();
-    if (e.dataTransfer?.types.includes('Files')) {
-      e.dataTransfer.dropEffect = 'copy';
-      this.dragOverB = true;
-    }
+    e.dataTransfer.dropEffect = 'copy';
+    this.dragOverB = true;
   }
 
   private onDragLeaveB(e: DragEvent): void {
+    if (!this.dragOverB) return;
     e.stopPropagation();
     this.dragOverB = false;
   }
 
   private onDropB(e: DragEvent): void {
+    if (!e.dataTransfer?.types.includes('Files')) return;
     e.preventDefault();
     e.stopPropagation();
     this.dragOverB = false;
 
-    const files = e.dataTransfer?.files;
+    const files = e.dataTransfer.files;
     if (files && files.length > 0) {
       const audioFile = Array.from(files).find(
         (f) => f.type.startsWith('audio/') || f.name.match(/\.(wav|mp3|ogg|flac|aiff|m4a)$/i),
