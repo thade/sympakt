@@ -33,7 +33,7 @@ function capturedShapeFixture(): Uint8Array {
 }
 
 function capturedEmptySlotFixture(): Uint8Array {
-  // Slot 1 was cleared with Elektroid, then read from a real OS 1.40 Syntakt.
+  // Slot 1 was cleared, then read from a real OS 1.40 Syntakt.
   // It is the 43-byte payload returned in the final reader block.
   return Uint8Array.of(
     0xac, 0x11, 0xd3, 0x03, 0x02, 0x00, 0x08, 0x00,

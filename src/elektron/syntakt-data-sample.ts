@@ -83,7 +83,7 @@ export function parseSyntaktDataSample(raw: Uint8Array): SyntaktDataSampleRead {
   const pcmBigEndian = raw.slice(pcmStart, footerOffset);
   if (pcmBigEndian.length !== frames * 2 || pcmBigEndian.length % 2) throw new Error('Invalid Syntakt sample PCM length');
   const calculatedHash = syntaktCrc32(raw.slice(slotHeaderOffset, footerOffset));
-  // Elektroid's captured writer uses the literal 12-byte footer length. The
+  // The captured writer uses the literal 12-byte footer length. The
   // same stored sample, when read back from OS 1.40, reports payloadBytes in
   // this field instead. Both forms have the same CRC and footer magic.
   if ((footerSize !== FOOTER_BYTES && footerSize !== payloadBytes) || footerMagic !== FOOTER_MAGIC || footerHash !== calculatedHash) {
