@@ -30,6 +30,7 @@ Create, preview, and export 64-slot sample banks for the [Elektron Syntakt](http
 - **Built-in sample editor** — trim, fade, reverse, normalize, bit crusher,  filter, and slice samples without leaving the app
 - **Virtual keyboard** — 2-octave chromatic keyboard to audition samples at different pitches
 - **Fully offline & private** — single self-contained HTML file, zero backend, session auto-saved in browser
+- **Direct Syntakt upload research** — an experimental protocol integration is being validated against real hardware before release
 
 ## Usage
 
@@ -94,6 +95,16 @@ Exported as a single WAV: A in the first half, B reversed in the second half, se
 ### Normalization
 
 Samples are peak-normalized by default. You can disable this in the export dialog.
+
+### Direct Syntakt Upload
+
+Use **Connect Syntakt** in the toolbar to choose a USB MIDI input/output pair, then identify and inspect a connected device. The verified session stays active when the inspector is closed, until **Disconnect** is selected there. On Chromium over HTTPS or localhost, the main-toolbar **Import Syntakt** button reads all 64 global-library positions sequentially into the browser bank; it never writes to the device, but it does replace the current local bank after confirmation. While reading, it becomes **Cancel Syntakt import**. Cancellation disconnects Sympakt’s MIDI session defensively, so reconnect before the next device operation. A verified OS 1.40 empty library position is imported as an empty browser slot; any other rejected or malformed position, cancellation, or local bank change during reading stops the replacement and preserves the existing browser bank. Sympakt keeps each device sample as 16-bit / 48 kHz mono data so it can be edited or exported normally afterwards.
+
+**Export to Syntakt** is enabled after a verified Syntakt connection and inventory inspection. It writes each occupied Sympakt bank slot only to the same-numbered Syntakt slot, after a deliberate overwrite acknowledgement and a user-selected local folder for durable WAV backups before the first device write. Before each writer opens, an exclusive MIDI operation re-identifies the device, checks inventory, and downloads the target again for an exact comparison with its backup. Readback verification is enabled by default and compares device PCM after every write; it may be explicitly unticked for a faster transfer. A completed write with readback unticked is still shown as successful, but unverified. Every backup run uses one strict `sympakt-syntakt-transfer` manifest, closed and revalidated after every transition; its legal sequential crash states are `backed-up* planned*`, `verified* (written|write-started)? backed-up*`, or `written* write-started? backed-up*`. Use **Recover backup run** after an interruption: recovery preflights the entire run and writes only where the live slot still matches the recorded intended upload. Empty device targets are rejected before the backup-folder chooser because restore-to-empty has not been validated yet. Files with another manifest format are rejected for automatic recovery and their WAV files are left untouched. The current OS 1.40 development matrix has passed a real Chromium/Web MIDI single-slot backup, upload, readback, restore, and independent checksum comparison.
+
+#### Protocol capture (developer only)
+
+`tools/capture-syntakt-readonly.sh` runs the locally instrumented Elektroid CLI with MIDI Stop disabled and permits only `info`, root sample-directory listing, and a single-slot download. It writes a non-overwriting capture directory containing `manifest.json`, raw `trace.ndjson`, and separate command output. OS 1.40 evidence shows a 64-slot `/samples/` data store rather than a folder filesystem. A guarded slot-1 clear/read/restore experiment captured the authentic 43-byte empty-slot reader container and restored the original WAV with an identical SHA-256. `tools/capture-syntakt-slot-1-clear.sh` is hard-coded to slot 1 and requires a fresh acknowledgement; it is for protocol conformance only, never routine sample management.
 
 ## Development
 

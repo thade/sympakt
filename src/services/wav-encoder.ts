@@ -48,6 +48,28 @@ export function encodeWav(samples: Float32Array, sampleRate = EXPORT_SAMPLE_RATE
   return buffer;
 }
 
+/** Wrap already-quantized 16-bit little-endian mono PCM in a minimal WAV. */
+export function encodePcm16leWav(pcm16le: Uint8Array, sampleRate = EXPORT_SAMPLE_RATE): Uint8Array {
+  if (pcm16le.length % 2) throw new Error('PCM16 WAV data must contain whole samples');
+  const result = new Uint8Array(44 + pcm16le.length);
+  const view = new DataView(result.buffer);
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, result.length - 8, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, pcm16le.length, true);
+  result.set(pcm16le, 44);
+  return result;
+}
+
 function writeString(view: DataView, offset: number, str: string): void {
   for (let i = 0; i < str.length; i++) {
     view.setUint8(offset + i, str.charCodeAt(i));

@@ -205,6 +205,7 @@ class BankStateStore {
   private slots: (Sample | null)[] = new Array(MAX_SLOTS).fill(null);
   private listeners = new Set<BankListener>();
   private saveTimer?: ReturnType<typeof setTimeout>;
+  private _revision = 0;
   private _selectedIndex: number | null = null;
   private _selectedSide: 'a' | 'b' = 'a';
 
@@ -216,6 +217,11 @@ class BankStateStore {
   /** Side selected for keyboard preview when the selected slot is dual-split */
   get selectedSide(): 'a' | 'b' {
     return this._selectedSide;
+  }
+
+  /** Monotonically increases whenever bank contents/configuration change. */
+  get revision(): number {
+    return this._revision;
   }
 
   /** Select a slot (null to deselect). Resets selectedSide to 'a'. */
@@ -293,6 +299,14 @@ class BankStateStore {
   setSample(index: number, sample: Sample | null): void {
     if (index < 0 || index >= MAX_SLOTS) return;
     this.slots[index] = sample;
+    this.notify();
+  }
+
+  /** Replace the complete browser bank, retaining exactly the fixed 64-slot layout. */
+  replaceAll(samples: ReadonlyArray<Sample | null>): void {
+    this.slots = Array.from({ length: MAX_SLOTS }, (_, index) => samples[index] ?? null);
+    this._selectedIndex = null;
+    this._selectedSide = 'a';
     this.notify();
   }
 
@@ -743,6 +757,9 @@ class BankStateStore {
       const slots = await loadBank();
       if (slots) {
         this.slots = slots;
+        // Restoring replaces content without persisting it again, but it must
+        // still invalidate any in-flight operation based on an older bank.
+        this._revision += 1;
         this.notifyOnly();
         return true;
       }
@@ -760,6 +777,7 @@ class BankStateStore {
   }
 
   private notify(): void {
+    this._revision += 1;
     this.notifyOnly();
     this.debouncedSave();
   }

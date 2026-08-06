@@ -100,6 +100,64 @@ async function exportDualSplitPCM(sample: Sample, speedFactor: number): Promise<
   return result;
 }
 
+/** A rendered device-ready sample shared by ZIP export and direct Syntakt transfer. */
+export interface PreparedSampleExport {
+  slot: number;
+  filename: string;
+  /** Signed 16-bit little-endian mono PCM, without a WAV container. */
+  pcm16le: Uint8Array;
+  wavData: Uint8Array;
+}
+
+/**
+ * Render every occupied slot using Sympakt's export rules. This deliberately
+ * excludes metadata and originals: those are ZIP-only concerns.
+ */
+export async function prepareSampleExports(
+  slots: ReadonlyArray<Sample | null>,
+  normalizeOnExport: boolean,
+): Promise<PreparedSampleExport[]> {
+  const prepared: PreparedSampleExport[] = [];
+  for (let i = 0; i < slots.length; i++) {
+    const sample = slots[i];
+    if (!sample || (sample.splitEnabled && sample.aEmpty && !sample.splitSample)) continue;
+    const speedFactor = getLofiSpeedFactor(sample.lofi);
+    let pcm: Float32Array;
+    if (sample.splitEnabled) {
+      pcm = await exportDualSplitPCM(sample, speedFactor);
+    } else {
+      const exportBuffer = await resampleToExportFormat(sample.audioBuffer, speedFactor);
+      pcm = getMonoPCM(exportBuffer);
+      if (sample.loop) {
+        const loop = isLofiActive(sample.lofi)
+          ? { ...sample.loop, startTime: sample.loop.startTime / speedFactor, endTime: sample.loop.endTime / speedFactor, crossfadeDuration: sample.loop.crossfadeDuration / speedFactor }
+          : sample.loop;
+        if (loop.crossfadeDuration > 0) pcm = applyCrossfade(pcm, loop, exportBuffer.sampleRate);
+        pcm = pcm.slice(Math.round(loop.startTime * exportBuffer.sampleRate), Math.min(Math.round(loop.endTime * exportBuffer.sampleRate), pcm.length));
+      } else {
+        pcm = pcm.slice(0, Math.round(MAX_SAMPLE_DURATION * exportBuffer.sampleRate));
+      }
+    }
+    if (normalizeOnExport) normalizePCM(pcm);
+    const slotNumber = String(i + 1).padStart(2, '0');
+    const filename = sample.splitEnabled
+      ? `${slotNumber}_${sample.aEmpty ? 'empty' : sanitizeFilename(sample.name)}-${sample.splitSample ? sanitizeFilename(sample.splitSample.name) : 'empty'}_DUAL.wav`
+      : `${slotNumber}_${sanitizeFilename(sample.name)}${sample.detectedNote ? `_${sample.detectedNote}` : ''}.wav`;
+    const wavData = new Uint8Array(encodeWav(pcm));
+    prepared.push({ slot: i + 1, filename, pcm16le: wavData.slice(44), wavData });
+  }
+  return prepared;
+}
+
+function normalizePCM(pcm: Float32Array): void {
+  let peak = 0;
+  for (const value of pcm) peak = Math.max(peak, Math.abs(value));
+  if (peak > 0 && peak < 1) {
+    const gain = 1 / peak;
+    for (let i = 0; i < pcm.length; i++) pcm[i] *= gain;
+  }
+}
+
 /**
  * Export the sample bank as a .zip file and trigger download.
  */
@@ -109,75 +167,16 @@ export async function exportSamplePack(
 ): Promise<Blob> {
   const files: Record<string, Uint8Array> = {};
   const slotMetadata: SlotMetadata[] = [];
+  const preparedBySlot = new Map(
+    (await prepareSampleExports(slots, options.normalizeOnExport)).map((prepared) => [prepared.slot, prepared]),
+  );
 
   for (let i = 0; i < slots.length; i++) {
     const sample = slots[i];
     if (!sample) continue;
-    // Skip dual slots that are entirely empty (A empty AND B missing).
-    if (sample.splitEnabled && sample.aEmpty && !sample.splitSample) continue;
-
-    const slotNumber = String(i + 1).padStart(2, '0');
-    const speedFactor = getLofiSpeedFactor(sample.lofi);
-    let pcm: Float32Array;
-
-    if (sample.splitEnabled) {
-      // --- Dual split export ---
-      pcm = await exportDualSplitPCM(sample, speedFactor);
-    } else {
-      // --- Normal single sample export ---
-      const exportBuffer = await resampleToExportFormat(sample.audioBuffer, speedFactor);
-      pcm = getMonoPCM(exportBuffer);
-
-      if (sample.loop) {
-        const sf = speedFactor;
-        const loopForExport = isLofiActive(sample.lofi)
-          ? {
-              ...sample.loop,
-              startTime: sample.loop.startTime / sf,
-              endTime: sample.loop.endTime / sf,
-              crossfadeDuration: sample.loop.crossfadeDuration / sf,
-            }
-          : sample.loop;
-        if (loopForExport.crossfadeDuration > 0) {
-          pcm = applyCrossfade(pcm, loopForExport, exportBuffer.sampleRate);
-        }
-        const startSample = Math.round(loopForExport.startTime * exportBuffer.sampleRate);
-        const endSample = Math.round(loopForExport.endTime * exportBuffer.sampleRate);
-        pcm = pcm.slice(startSample, Math.min(endSample, pcm.length));
-      } else {
-        const maxSamples = Math.round(MAX_SAMPLE_DURATION * exportBuffer.sampleRate);
-        if (pcm.length > maxSamples) {
-          pcm = pcm.slice(0, maxSamples);
-        }
-      }
-    }
-
-    // Normalize PCM to maximize volume without clipping
-    if (options.normalizeOnExport) {
-      let peak = 0;
-      for (let j = 0; j < pcm.length; j++) {
-        const abs = Math.abs(pcm[j]);
-        if (abs > peak) peak = abs;
-      }
-      if (peak > 0 && peak < 1) {
-        const gain = 1 / peak;
-        for (let j = 0; j < pcm.length; j++) {
-          pcm[j] *= gain;
-        }
-      }
-    }
-
-    let exportName: string;
-    if (sample.splitEnabled) {
-      const aName = sample.aEmpty ? 'empty' : sanitizeFilename(sample.name);
-      const bName = sample.splitSample ? sanitizeFilename(sample.splitSample.name) : 'empty';
-      exportName = `${slotNumber}_${aName}-${bName}_DUAL.wav`;
-    } else {
-      const noteSuffix = sample.detectedNote ? `_${sample.detectedNote}` : '';
-      exportName = `${slotNumber}_${sanitizeFilename(sample.name)}${noteSuffix}.wav`;
-    }
-    const wavData = encodeWav(pcm);
-    files[exportName] = new Uint8Array(wavData);
+    const prepared = preparedBySlot.get(i + 1);
+    if (!prepared) continue;
+    files[prepared.filename] = prepared.wavData;
 
     const meta: SlotMetadata = {
       slot: i + 1,

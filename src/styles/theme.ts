@@ -86,6 +86,17 @@ export const sharedStyles = css`
     transform: scale(0.97);
   }
 
+  button:disabled,
+  button:disabled:hover {
+    cursor: not-allowed;
+    opacity: 0.38;
+    filter: grayscale(1);
+    color: var(--text-muted);
+    background: var(--bg-primary);
+    border-color: var(--border-color);
+    box-shadow: none;
+  }
+
   button.primary {
     background: var(--accent-dim);
     border-color: var(--accent);
@@ -104,6 +115,15 @@ export const sharedStyles = css`
 
   button.danger:hover {
     background: rgba(255, 68, 68, 0.15);
+  }
+
+  button.primary:disabled,
+  button.primary:disabled:hover,
+  button.danger:disabled,
+  button.danger:disabled:hover {
+    color: var(--text-muted);
+    background: var(--bg-primary);
+    border-color: var(--border-color);
   }
 
   input[type='text'] {

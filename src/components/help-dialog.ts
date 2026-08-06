@@ -210,6 +210,15 @@ export class HelpDialog extends LitElement {
               <li>Metadata is bundled so packs can be re-imported losslessly.</li>
             </ul>
 
+            <h3>Connect / Import Syntakt</h3>
+            <p>
+              Use <span class="accent">Connect Syntakt</span> in the toolbar to select a USB MIDI device, inspect its
+              global sample library, then use the main-toolbar <span class="accent">Import Syntakt</span> button. Import reads all 64 library
+              positions and replaces the browser bank after confirmation; it never modifies the device. The button becomes
+              <span class="accent">Cancel Syntakt import</span> while reading. Cancellation disconnects Sympakt’s MIDI session defensively, so reconnect before the next device action. A verified empty library position becomes an empty browser slot; any failed or malformed read, or a local edit during the read, preserves the existing browser bank. It needs
+              Chromium with SysEx permission over HTTPS or localhost. <span class="accent">Export to Syntakt</span> is enabled after inspection and opens a confirmation dialog: it backs up every same-numbered target slot to a local folder before writing, then compares it again immediately before the write. Readback verification is on by default and can be turned off for a faster transfer; that result is shown as successful but unverified. <span class="accent">Recover backup run</span> reloads an interrupted transfer only when the live slot still matches its recorded original or intended upload.
+            </p>
+
             <h3>Shortcuts</h3>
             <ul>
               <li><kbd>P</kbd> — toggle virtual keyboard</li>

@@ -1,0 +1,449 @@
+import { LitElement, html, css, nothing } from 'lit';
+import { customElement, property, state } from 'lit/decorators.js';
+import { theme, sharedStyles } from '../styles/theme.js';
+import { connectSyntakt, discoverSyntaktDevices, inspectSyntaktSlots, isSyntaktTransferSupported, isSyntaktTransferWriteEnabled, restoreSyntaktTransactionBackups, SyntaktBatchTransferError, uploadSympaktBank } from '../services/syntakt-transfer.js';
+import type { BankTransferProgress, BankTransferResult, ExplicitSlotMapping, SyntaktConnection, SyntaktRecoveryEntry } from '../services/syntakt-transfer.js';
+import type { WebMidiDevice } from '../midi/web-midi-transport.js';
+import type { SyntaktSampleSlot } from '../elektron/syntakt-slot-list.js';
+import type { Sample } from '../types/index.js';
+import { SyntaktTransferJournalCoordinator, loadSyntaktRecoveryEntries } from '../services/syntakt-transfer-journal.js';
+import type { SyntaktBackupDirectoryHandle, SyntaktBackupFileHandle } from '../services/syntakt-transfer-journal.js';
+import { classifySyntaktTransferResults } from '../services/syntakt-transfer-results.js';
+import { downloadSyntaktBank } from '../services/syntakt-import.js';
+import type { ImportedSyntaktSlot, SyntaktBankImportProgress } from '../services/syntakt-import.js';
+
+interface BackupDirectoryHandle extends SyntaktBackupDirectoryHandle {
+  getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<BackupDirectoryHandle>;
+  getFileHandle(name: string, options?: { create?: boolean }): Promise<SyntaktBackupFileHandle>;
+}
+
+/** A global-library inspector with a guarded same-slot sample-bank writer. */
+@customElement('sp-syntakt-transfer-dialog')
+export class SyntaktTransferDialog extends LitElement {
+  static override styles = [theme, sharedStyles, css`
+    :host { display: none; }
+    :host([open]) { display: block; }
+    .overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, .78); display: grid; place-items: center; padding: 16px; }
+    .dialog { width: min(680px, 100%); max-height: min(760px, calc(100dvh - 32px)); overflow: hidden; border: 1px solid var(--border-color); background: var(--bg-secondary); box-shadow: 8px 8px 0 rgba(0,0,0,.35); display: flex; flex-direction: column; }
+    .head { padding: 20px 22px 14px; border-bottom: 1px solid var(--border-color); background: linear-gradient(110deg, var(--bg-secondary), #10231f); }
+    h2 { font-family: var(--font-pixel); color: var(--accent); font-size: 10px; letter-spacing: 2px; margin: 0 0 8px; text-transform: uppercase; }
+    .subhead { color: var(--text-muted); font-family: var(--font-pixel); font-size: 6px; line-height: 1.7; letter-spacing: 1px; text-transform: uppercase; }
+    .content { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 22px 18px; }
+    .notice { color: var(--warning); font-family: var(--font-pixel); font-size: 6px; letter-spacing: 1px; line-height: 1.75; border-left: 2px solid var(--warning); padding-left: 10px; margin: 14px 0; text-transform: uppercase; }
+    .status { border: 1px solid var(--border-color); padding: 12px; background: var(--bg-primary); margin: 14px 0; }
+    .status.connected { border-color: var(--accent); }
+    .status.error { border-color: var(--danger); color: var(--danger); }
+    .label { display: block; color: var(--text-muted); font-family: var(--font-pixel); font-size: 6px; letter-spacing: 1px; margin-bottom: 6px; text-transform: uppercase; }
+    .device { font-family: var(--font-pixel); font-size: 8px; color: var(--accent); letter-spacing: 1px; }
+    .detail { color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; margin-top: 6px; }
+    .inventory { border: 1px solid var(--border-color); background: var(--bg-primary); }
+    .inventory-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; margin-top: 14px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; }
+    .inventory-summary button { flex: 0 0 auto; padding: 5px 8px; font-size: 6px; }
+    .inventory-summary > span:last-child { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .inventory-head, .slot { display: grid; grid-template-columns: 42px minmax(0, 1fr) 80px 48px; align-items: center; gap: 8px; }
+    .inventory-head { padding: 7px 10px; color: var(--text-muted); background: #101010; border-bottom: 1px solid var(--border-color); font-family: var(--font-pixel); font-size: 6px; letter-spacing: 1px; text-transform: uppercase; }
+    .slot { min-height: 29px; padding: 5px 10px; border-bottom: 1px solid rgba(255,255,255,.06); font-family: var(--font-mono); font-size: 10px; }
+    .slot:last-child { border-bottom: 0; }
+    .slot-number { color: var(--accent); font-family: var(--font-pixel); font-size: 7px; }
+    .slot-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+    .slot-size { text-align: right; color: var(--text-secondary); font-size: 9px; }
+    .slot-state { color: var(--text-muted); font-family: var(--font-pixel); font-size: 6px; text-align: right; text-transform: uppercase; }
+    .slot-state[data-present='true'] { color: var(--accent-dim); }
+    .button-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    .write-panel { margin-top: 16px; border: 1px solid var(--warning); background: rgba(255, 136, 0, .05); padding: 12px; }
+    .write-title { color: var(--warning); font-family: var(--font-pixel); font-size: 7px; letter-spacing: 1px; text-transform: uppercase; }
+    .device-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 14px 0; }
+    .device-picker select { min-width: 0; width: 100%; background: var(--bg-primary); border: 1px solid var(--border-color); color: var(--text-primary); padding: 8px; font-family: var(--font-mono); font-size: 10px; }
+    .confirmation { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; padding: 10px; border: 1px solid var(--warning-dim); color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; line-height: 1.45; }
+    .confirmation input { width: auto; margin: 1px 0 0; accent-color: var(--warning); }
+    .progress { margin-top: 12px; color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; }
+    .bar { height: 6px; margin-top: 5px; border: 1px solid var(--border-color); background: var(--bg-primary); }
+    .bar > div { height: 100%; background: var(--warning); transition: width .1s linear; }
+    @media (max-width: 520px) { .head, .content { padding-left: 14px; padding-right: 14px; } .inventory-head, .slot { grid-template-columns: 34px minmax(0, 1fr) 66px; } .slot-state, .inventory-head span:last-child { display: none; } }
+  `];
+
+  @property({ type: Boolean, reflect: true }) open = false;
+  @property({ attribute: false }) sampleSlots: ReadonlyArray<Sample | null> = [];
+  @property({ type: Boolean }) normalizeOnExport = true;
+  @state() private connection: SyntaktConnection | null = null;
+  @state() private devices: WebMidiDevice[] = [];
+  @state() private selectedDeviceId = '';
+  @state() private slots: SyntaktSampleSlot[] = [];
+  @state() private showInventory = false;
+  @state() private connecting = false;
+  @state() private discoveringDevices = false;
+  @state() private refreshing = false;
+  @state() private transferActive = false;
+  @state() private importingBank = false;
+  @state() private transferResults: readonly BankTransferResult[] = [];
+  @state() private recoveryEntries: readonly SyntaktRecoveryEntry[] = [];
+  @state() private restoreAcknowledged = false;
+  @state() private error = '';
+  private abortController: AbortController | null = null;
+  private removeConnectionTerminal: (() => void) | null = null;
+
+  override render() {
+    if (!this.open) return nothing;
+    const compatible = isSyntaktTransferSupported();
+    return html`<div class="overlay" @click=${this.onOverlayClick}>
+      <section class="dialog" @click=${(event: Event) => event.stopPropagation()} aria-label="Syntakt sample library inspector">
+        <div class="head">
+          <h2>Syntakt / Sample Library</h2>
+          <div class="subhead">USB MIDI connection · OS 1.40</div>
+        </div>
+        <div class="content">
+          ${!compatible ? html`<div class="status error">Web MIDI SysEx needs Chromium on HTTPS or localhost.</div>` : html`
+            <div class="status ${this.connection ? 'connected' : ''} ${this.error ? 'error' : ''}">
+              <span class="label">Device link</span>
+              ${this.connection
+                ? html`<div class="device">${this.connection.identity.name} · OS ${this.connection.identity.osVersion}</div><div class="detail">${this.error || `${this.slots.length}/64 global library records inspected`}</div>`
+                : html`<div class="detail">${this.error || 'Connect a Syntakt over USB MIDI. Close Transfer and Overbridge first.'}</div>`}
+            </div>
+            ${!this.connection ? this.renderDevicePicker() : nothing}
+            ${this.connection ? html`
+              <div class="inventory-summary"><span>${this.slots.length === 64 ? '64 global library records inspected' : 'No verified inventory response yet'}</span><span><button ?disabled=${!this.slots.length} @click=${this.toggleInventory}>${this.showInventory ? 'Hide slots' : 'Show 64 slots'}</button><button ?disabled=${this.isBusy() || !directoryPickerSupported()} @click=${this.openSavedBackupRun}>Recover backup run</button></span></div>
+              ${this.showInventory ? this.renderInventory() : nothing}
+              ${this.transferResults.length ? html`<div class="status ${classifySyntaktTransferResults(this.transferResults).successful ? 'connected' : 'error'}"><span class="label">Last transfer</span><div class="detail">${this.transferResults.map((result) => `${String(result.sourceSlot).padStart(2, '0')}→${String(result.targetSlot).padStart(2, '0')} ${result.state}`).join(' · ')}</div></div>` : nothing}
+              ${this.recoveryEntries.length ? this.renderRestorePanel() : nothing}
+            ` : nothing}
+            <div class="button-row">
+              ${this.isBusy() ? html`<button class="danger" @click=${this.cancelTransfer}>Cancel ${this.importingBank ? 'import' : 'transfer'}</button>` : html`${this.connection ? html`<button class="danger" @click=${this.disconnect}>Disconnect</button>` : nothing}<button @click=${this.close}>Close</button>`}
+              ${this.connection ? html`<button class="primary" ?disabled=${this.refreshing || this.isBusy()} @click=${this.refresh}>${this.refreshing ? 'Refreshing…' : 'Refresh inventory'}</button>` : html`<button class="primary" ?disabled=${this.connecting || !this.devices.length} @click=${this.connect}>${this.connecting ? 'Connecting…' : 'Connect selected device'}</button>`}
+            </div>
+          `}
+        </div>
+      </section>
+    </div>`;
+  }
+
+  private renderInventory() {
+    return html`<div class="inventory" aria-label="Syntakt global sample library slots">
+      <div class="inventory-head"><span>Slot</span><span>Name</span><span>Stored</span><span>Data</span></div>
+      ${this.slots.map((slot) => html`
+        <div class="slot">
+          <span class="slot-number">${String(slot.slot).padStart(2, '0')}</span>
+          <span class="slot-name" title=${slot.name}>${slot.name}</span>
+          <span class="slot-size">${formatBytes(slot.storedBytes)}</span>
+          <span class="slot-state" data-present=${slot.hasData}>${slot.hasData ? 'present' : 'unknown'}</span>
+        </div>
+      `)}
+    </div>`;
+  }
+
+  private toggleInventory(): void { this.showInventory = !this.showInventory; }
+
+  private renderDevicePicker() {
+    return html`<div class="device-picker">
+      <select aria-label="USB MIDI device" .value=${this.selectedDeviceId} ?disabled=${this.discoveringDevices || this.connecting || !this.devices.length} @change=${this.selectDevice}>
+        <option value="">${this.devices.length ? 'Choose USB MIDI device…' : 'Find USB MIDI devices first'}</option>
+        ${this.devices.map((device) => html`<option value=${device.id}>${device.inputName} ↔ ${device.outputName}</option>`)}
+      </select>
+      <button ?disabled=${this.discoveringDevices || this.connecting} @click=${this.findDevices}>${this.discoveringDevices ? 'Finding…' : 'Find devices'}</button>
+    </div>`;
+  }
+
+  private async findDevices(): Promise<void> {
+    if (this.discoveringDevices || this.connecting) return;
+    this.discoveringDevices = true;
+    this.error = '';
+    try {
+      this.devices = await discoverSyntaktDevices();
+      if (!this.devices.some((device) => device.id === this.selectedDeviceId)) {
+        this.selectedDeviceId = this.devices.length === 1 ? this.devices[0].id : '';
+      }
+    } catch (error) {
+      this.devices = [];
+      this.selectedDeviceId = '';
+      this.error = error instanceof Error ? error.message : 'Could not inspect USB MIDI devices';
+    } finally {
+      this.discoveringDevices = false;
+    }
+  }
+
+  private selectDevice(event: Event): void {
+    this.selectedDeviceId = (event.target as HTMLSelectElement).value;
+  }
+
+  private async connect(): Promise<void> {
+    if (!this.selectedDeviceId) return;
+    this.connecting = true; this.error = ''; this.slots = []; this.showInventory = false;
+    try {
+      this.connection = await connectSyntakt(this.selectedDeviceId);
+      const connected = this.connection;
+      this.removeConnectionTerminal = connected.session.onTerminal((error) => {
+        void this.invalidateConnection(error.message, false);
+      });
+      await this.refresh();
+    } catch (error) {
+      await this.invalidateConnection(error instanceof Error ? error.message : 'Could not connect to Syntakt');
+    } finally { this.connecting = false; }
+  }
+
+  private async refresh(): Promise<boolean> {
+    if (!this.connection || this.refreshing) return false;
+    this.refreshing = true; this.error = '';
+    try {
+      this.slots = await inspectSyntaktSlots(this.connection);
+      this.dispatchConnectionChange(true);
+      return true;
+    } catch (error) {
+      await this.invalidateConnection(error instanceof Error ? error.message : 'Could not inspect Syntakt sample slots');
+      return false;
+    }
+    finally {
+      this.refreshing = false;
+    }
+  }
+
+  /** Called by the persistent main-toolbar import button. */
+  async importBank(): Promise<void> {
+    await this.importAllSlots();
+  }
+
+  /** Cancels the current read and invalidates the MIDI session. */
+  cancelImport(): void {
+    if (this.importingBank) this.abortController?.abort();
+  }
+
+  /** Starts the guarded main-toolbar export after its confirmation dialog. */
+  async startBankExport(verifyReadback: boolean): Promise<void> {
+    if (!this.connection || this.isBusy() || this.slots.length !== 64) {
+      this.dispatchExportFailure('Connect and inspect a Syntakt before exporting', false);
+      return;
+    }
+    const sourceCount = this.sampleSlots.filter((sample) => sample !== null).length;
+    if (!sourceCount) {
+      this.dispatchExportFailure('Load at least one Sympakt sample before exporting', false);
+      return;
+    }
+    const emptyTargets = this.sampleSlots.flatMap((sample, index) => {
+      if (!sample) return [];
+      const target = this.slots.find((slot) => slot.slot === index + 1);
+      return target && target.name === '' && !target.hasData && target.storedBytes === 0 ? [index + 1] : [];
+    });
+    if (emptyTargets.length) {
+      this.dispatchExportFailure(`Export cannot yet overwrite empty Syntakt target slot${emptyTargets.length === 1 ? '' : 's'} ${emptyTargets.map((slot) => String(slot).padStart(2, '0')).join(', ')} because exact restore-to-empty is not validated`, false);
+      return;
+    }
+    const picker = getDirectoryPicker();
+    if (!picker) {
+      this.dispatchExportFailure('Export requires Chromium’s local-folder permission for durable WAV backups', false);
+      return;
+    }
+    let backupParent: BackupDirectoryHandle;
+    try {
+      backupParent = await picker();
+    } catch (error) {
+      this.dispatchExportFailure(error instanceof Error ? error.message : 'Backup folder selection was cancelled', false);
+      return;
+    }
+    await this.runTransfer(backupParent, verifyReadback);
+  }
+
+  /** Cancels a main-toolbar export and intentionally closes MIDI for safety. */
+  cancelBankExport(): void { if (this.transferActive) this.abortController?.abort(); }
+
+  private async importAllSlots(): Promise<void> {
+    if (!this.connection || this.isBusy() || this.slots.length !== 64) return;
+    const currentSamples = this.sampleSlots.filter((sample) => sample !== null).length;
+    if (!confirm(`Import all 64 Syntakt library positions into Sympakt? This replaces the current browser bank (${currentSamples} loaded sample${currentSamples === 1 ? '' : 's'}). The Syntakt will not be modified.`)) return;
+
+    this.importingBank = true;
+    this.error = '';
+    this.dispatchImportState(true);
+    this.abortController = new AbortController();
+    try {
+      const slots = await downloadSyntaktBank(this.connection, this.slots, {
+        signal: this.abortController.signal,
+        onProgress: (progress) => {
+          this.dispatchImportState(true, progress);
+        },
+      });
+      this.dispatchEvent(new CustomEvent<{ slots: ReadonlyArray<ImportedSyntaktSlot | null> }>('syntakt-bank-import', {
+        detail: { slots }, bubbles: true, composed: true,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Syntakt import failed';
+      const cancelled = error instanceof DOMException && error.name === 'AbortError';
+      this.dispatchEvent(new CustomEvent<{ message: string; cancelled: boolean }>('syntakt-bank-import-failure', {
+        detail: { message, cancelled }, bubbles: true, composed: true,
+      }));
+      await this.invalidateConnection(message);
+    } finally {
+      this.importingBank = false;
+      this.abortController = null;
+      this.dispatchImportState(false);
+    }
+  }
+
+  private renderRestorePanel() {
+    const slots = this.recoveryEntries.map((entry) => String(entry.backup.slot).padStart(2, '0')).join(', ');
+    return html`<section class="write-panel" aria-label="Exact Syntakt backup restoration">
+      <div class="write-title">Recover saved originals</div>
+      <div class="notice">Before every write, recovery proves the slot still contains either its recorded original PCM or the exact intended export. Unknown content stops the entire recovery. Every restore is read back.</div>
+      <label class="confirmation"><input type="checkbox" .checked=${this.restoreAcknowledged} ?disabled=${this.isBusy()} @change=${(event: Event) => this.restoreAcknowledged = (event.target as HTMLInputElement).checked} /><span>I understand that slots ${slots} may be replaced by their saved original PCM.</span></label>
+      <div class="button-row"><button class="danger" ?disabled=${!this.restoreAcknowledged || this.isBusy()} @click=${this.startRestore}>Restore originals exactly</button></div>
+    </section>`;
+  }
+
+  private async runTransfer(backupParent: BackupDirectoryHandle, verifyReadback: boolean): Promise<void> {
+    if (!this.connection || this.isBusy()) return;
+    const sourceSlots = this.sampleSlots.flatMap((sample, index) => sample ? [index + 1] : []);
+    const mappings: ExplicitSlotMapping[] = [];
+    for (const sourceSlot of sourceSlots) {
+      const expectedTarget = this.slots.find((slot) => slot.slot === sourceSlot);
+      if (!expectedTarget) {
+        const message = `Syntakt slot ${sourceSlot} is no longer in the inspected inventory`;
+        this.dispatchExportFailure(message, false);
+        return;
+      }
+      mappings.push({ sourceSlot, targetSlot: sourceSlot, expectedTarget });
+    }
+    this.transferActive = true; this.error = ''; this.transferResults = []; this.recoveryEntries = []; this.restoreAcknowledged = false; this.abortController = new AbortController();
+    this.dispatchExportState(true);
+    let journal: SyntaktTransferJournalCoordinator | null = null;
+    try {
+      const backupDirectory = await createBackupRunDirectory(backupParent);
+      journal = new SyntaktTransferJournalCoordinator(backupDirectory);
+      this.transferResults = await uploadSympaktBank(this.connection, this.sampleSlots, {
+        mappings,
+        normalizeOnExport: this.normalizeOnExport,
+        verifyReadback,
+        signal: this.abortController.signal,
+        journal,
+        onProgress: (progress) => {
+          this.dispatchExportState(true, progress);
+        },
+      });
+      this.recoveryEntries = journal.recoveryEntries;
+      this.dispatchExportComplete(this.transferResults, verifyReadback);
+      await this.refresh();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Syntakt transfer failed';
+      if (error instanceof SyntaktBatchTransferError) this.transferResults = error.results;
+      if (journal) this.recoveryEntries = journal.recoveryEntries;
+      this.dispatchExportFailure(message, message.startsWith('Transfer cancelled'));
+      await this.invalidateConnection(message);
+    } finally {
+      this.transferActive = false;
+      this.abortController = null;
+      this.dispatchExportState(false);
+    }
+  }
+
+  private async startRestore(): Promise<void> {
+    if (!this.connection || this.isBusy() || !this.restoreAcknowledged || !isSyntaktTransferWriteEnabled() || !this.recoveryEntries.length) return;
+    this.transferActive = true; this.error = ''; this.transferResults = []; this.abortController = new AbortController();
+    try {
+      this.transferResults = await restoreSyntaktTransactionBackups(this.connection, this.recoveryEntries, {
+        signal: this.abortController.signal,
+        onProgress: () => undefined,
+      });
+      this.recoveryEntries = [];
+      this.restoreAcknowledged = false;
+      await this.refresh();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Syntakt backup restoration failed';
+      if (error instanceof SyntaktBatchTransferError) this.transferResults = error.results;
+      await this.invalidateConnection(message);
+    } finally { this.transferActive = false; this.abortController = null; }
+  }
+
+  private cancelTransfer(): void { this.abortController?.abort(); }
+
+  private async openSavedBackupRun(): Promise<void> {
+    const picker = getDirectoryPicker();
+    if (!picker || this.isBusy()) return;
+    this.recoveryEntries = [];
+    this.restoreAcknowledged = false;
+    try {
+      this.recoveryEntries = await loadSyntaktRecoveryEntries(await picker());
+      this.error = '';
+    } catch (error) { this.error = error instanceof Error ? error.message : 'Could not load the saved backup run'; }
+  }
+
+  private isBusy(): boolean { return this.transferActive || this.importingBank; }
+
+  private dispatchConnectionChange(connected: boolean): void {
+    this.dispatchEvent(new CustomEvent<{ connected: boolean; name?: string; importReady?: boolean }>('syntakt-connection-change', {
+      detail: connected && this.connection ? { connected: true, name: this.connection.identity.name, importReady: this.slots.length === 64 } : { connected: false, importReady: false },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private dispatchImportState(active: boolean, progress: SyntaktBankImportProgress | null = null): void {
+    this.dispatchEvent(new CustomEvent<{ active: boolean; progress: SyntaktBankImportProgress | null }>('syntakt-bank-import-state', {
+      detail: { active, progress }, bubbles: true, composed: true,
+    }));
+  }
+
+  private dispatchExportState(active: boolean, progress: BankTransferProgress | null = null): void {
+    this.dispatchEvent(new CustomEvent<{ active: boolean; progress: BankTransferProgress | null }>('syntakt-bank-export-state', {
+      detail: { active, progress }, bubbles: true, composed: true,
+    }));
+  }
+
+  private dispatchExportComplete(results: readonly BankTransferResult[], verifyReadback: boolean): void {
+    this.dispatchEvent(new CustomEvent<{ results: readonly BankTransferResult[]; verifyReadback: boolean }>('syntakt-bank-export-complete', {
+      detail: { results, verifyReadback }, bubbles: true, composed: true,
+    }));
+  }
+
+  private dispatchExportFailure(message: string, cancelled: boolean): void {
+    this.dispatchEvent(new CustomEvent<{ message: string; cancelled: boolean }>('syntakt-bank-export-failure', {
+      detail: { message, cancelled }, bubbles: true, composed: true,
+    }));
+  }
+
+  private async invalidateConnection(error = '', closeSession = true): Promise<void> {
+    const connection = this.connection;
+    this.removeConnectionTerminal?.();
+    this.removeConnectionTerminal = null;
+    this.connection = null;
+    this.slots = [];
+    this.showInventory = false;
+    this.error = error;
+    this.dispatchConnectionChange(false);
+    if (closeSession) await connection?.session.close().catch(() => undefined);
+  }
+
+  private onOverlayClick(): void { if (!this.isBusy()) this.close(); }
+  private close(): void {
+    if (this.connecting || this.refreshing || this.isBusy()) return;
+    // The app keeps this dialog instance mounted. Hiding it must not close the
+    // verified MIDI session: disconnecting is an explicit user action below.
+    this.error = '';
+    this.open = false;
+    this.dispatchEvent(new CustomEvent('dialog-close'));
+  }
+
+  private async disconnect(): Promise<void> {
+    if (this.connecting || this.refreshing || this.isBusy()) return;
+    await this.invalidateConnection();
+  }
+}
+
+function getDirectoryPicker(): (() => Promise<BackupDirectoryHandle>) | null {
+  return (window as Window & { showDirectoryPicker?: () => Promise<BackupDirectoryHandle> }).showDirectoryPicker ?? null;
+}
+
+function directoryPickerSupported(): boolean { return getDirectoryPicker() !== null; }
+
+async function createBackupRunDirectory(parent: BackupDirectoryHandle): Promise<BackupDirectoryHandle> {
+  const name = `sympakt-syntakt-backup-${new Date().toISOString().replace(/[-:.TZ]/g, '')}`;
+  try {
+    await parent.getDirectoryHandle(name);
+    throw new Error(`Backup directory ${name} already exists; start a new transfer second later`);
+  } catch (error) {
+    if (error instanceof DOMException && error.name !== 'NotFoundError') throw error;
+    if (error instanceof Error && !(error instanceof DOMException)) throw error;
+  }
+  return parent.getDirectoryHandle(name, { create: true });
+}
+
+function formatBytes(bytes: number): string {
+  return bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+declare global { interface HTMLElementTagNameMap { 'sp-syntakt-transfer-dialog': SyntaktTransferDialog; } }
