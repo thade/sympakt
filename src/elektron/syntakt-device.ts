@@ -9,7 +9,10 @@ import type { SyntaktSampleSlot } from './syntakt-slot-list.js';
 // Confirmed by the OS 1.40 hardware transcript. The old value (13) was an
 // unverified assumption and must never be used to authorize device access.
 export const SYNTAKT_DEVICE_ID = 0x1e;
-export const SYNTAKT_SUPPORTED_OS_VERSIONS = new Set(['1.40']);
+/** Firmware versions proven safe for identity, listing, and sample reads. */
+export const SYNTAKT_SUPPORTED_OS_VERSIONS = new Set(['1.40', '1.40A']);
+/** Firmware versions proven live-safe for destructive sample operations. */
+export const SYNTAKT_WRITE_SUPPORTED_OS_VERSIONS = new Set(['1.40', '1.40A']);
 const DATA_SAMPLE_BLOCK_BYTES = 0x2000;
 const MAX_DATA_SAMPLE_READ_BLOCKS = 128;
 const MAX_DATA_SAMPLE_WRITE_BLOCKS = 128;
@@ -21,15 +24,24 @@ export interface SyntaktIdentity {
 }
 
 export interface SyntaktSlotFingerprint {
-  name: string;
+  name?: string;
   pcm16le?: Uint8Array;
   pcmSha256?: string;
+  /** Only valid for the captured empty global-library sentinel. */
+  empty?: boolean;
 }
 
 /** Exact device/firmware matrix captured and validated against hardware. */
 export function assertSupportedSyntaktIdentity(identity: SyntaktIdentity): void {
   if (identity.deviceId !== SYNTAKT_DEVICE_ID || identity.name !== 'Syntakt' || !SYNTAKT_SUPPORTED_OS_VERSIONS.has(identity.osVersion)) {
     throw new Error(`Syntakt OS ${identity.osVersion || 'unknown'} is not in the supported transfer matrix`);
+  }
+}
+
+export function assertSyntaktWriteIdentity(identity: SyntaktIdentity): void {
+  assertSupportedSyntaktIdentity(identity);
+  if (!SYNTAKT_WRITE_SUPPORTED_OS_VERSIONS.has(identity.osVersion)) {
+    throw new Error(`Syntakt OS ${identity.osVersion || 'unknown'} is read-only until direct-write conformance is complete`);
   }
 }
 
@@ -43,10 +55,6 @@ export class SyntaktWriteStateUnknownError extends Error {
     super(message);
     this.name = 'SyntaktWriteStateUnknownError';
   }
-}
-
-function text(bytes: Uint8Array): string {
-  return new TextDecoder('windows-1252').decode(bytes).replace(/\0.*$/, '');
 }
 
 function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
@@ -177,18 +185,18 @@ export class SyntaktDevice {
     signal?: AbortSignal,
   ): Promise<void> {
     const upload = buildSyntaktDataSample(slot, name, pcm16le);
-    if (!expectedContent.pcm16le && !expectedContent.pcmSha256) throw new Error('Syntakt write precondition is missing PCM evidence');
+    if (!expectedContent.empty && !expectedContent.pcm16le && !expectedContent.pcmSha256) throw new Error('Syntakt write precondition is missing PCM evidence');
     if (expectedContent.pcmSha256 && !/^[a-f0-9]{64}$/.test(expectedContent.pcmSha256)) throw new Error('Invalid Syntakt write precondition hash');
-    const expected = { name: expectedContent.name, pcm16le: expectedContent.pcm16le ? new Uint8Array(expectedContent.pcm16le) : undefined, pcmSha256: expectedContent.pcmSha256 };
+    const expected = { name: expectedContent.name, pcm16le: expectedContent.pcm16le ? new Uint8Array(expectedContent.pcm16le) : undefined, pcmSha256: expectedContent.pcmSha256, empty: expectedContent.empty === true };
     let writeAttempted = false;
     try {
       await this.session.exclusive(async (request) => {
         const identity = await this.identifyWith(request, signal);
-        assertSupportedSyntaktIdentity(identity);
+        assertSyntaktWriteIdentity(identity);
         const currentSlot = (await this.listSampleSlotsWith(request, signal)).find((entry) => entry.slot === slot);
         if (!currentSlot || !sameSlotRecord(currentSlot, expectedSlot)) throw new Error('Syntakt slot metadata changed before write; inspect and confirm again');
         const current = await this.downloadSlotWith(request, slot, signal);
-        if (current.empty || current.name !== expected.name || !(await contentMatches(current.pcm16le, expected))) {
+        if ((expected.empty && !current.empty) || (!expected.empty && (current.empty || !expected.name || current.name !== expected.name || !(await contentMatches(current.pcm16le, expected)))) ) {
           throw new Error(`Syntakt slot ${slot} changed after backup; writer was not opened`);
         }
 
@@ -228,6 +236,39 @@ export class SyntaktDevice {
     }
   }
 
+  /**
+   * Clear one exact global-library slot using the OS 1.40 captured delete
+   * command. The target is re-identified, re-listed, checked by content, and
+   * read back as the exact empty sentinel before this call returns.
+   */
+  async clearSlot(slot: number, expectedSlot: SyntaktSampleSlot, expectedContent: SyntaktSlotFingerprint, signal?: AbortSignal): Promise<void> {
+    if (!expectedContent.empty && !expectedContent.pcm16le && !expectedContent.pcmSha256) throw new Error('Syntakt clear precondition is missing PCM evidence');
+    let clearAttempted = false;
+    try {
+      await this.session.exclusive(async (request) => {
+        const identity = await this.identifyWith(request, signal);
+        assertSyntaktWriteIdentity(identity);
+        const currentSlot = (await this.listSampleSlotsWith(request, signal)).find((entry) => entry.slot === slot);
+        if (!currentSlot || !sameSlotRecord(currentSlot, expectedSlot)) throw new Error('Syntakt slot metadata changed before clear; inspect and confirm again');
+        const current = await this.downloadSlotWith(request, slot, signal);
+        const matches = expectedContent.empty === true
+          ? current.empty
+          : !current.empty && !!expectedContent.name && current.name === expectedContent.name && await contentMatches(current.pcm16le, expectedContent);
+        if (!matches) throw new Error(`Syntakt slot ${slot} changed before clear; clear was not opened`);
+        clearAttempted = true;
+        const response = await request(0x5c, dataSamplePath(slot), { signal });
+        if (response.length !== 6 || !commandAccepted(response)) throw new Error(`Syntakt refused clear for sample slot ${slot}`);
+        const readback = await this.downloadSlotWith(request, slot, signal);
+        if (!readback.empty) throw new Error(`Syntakt slot ${slot} did not read back as empty after clear`);
+      });
+    } catch (error) {
+      if (!clearAttempted) throw error;
+      await this.session.close().catch(() => undefined);
+      const detail = error instanceof Error ? error.message : 'unknown error';
+      throw new SyntaktWriteStateUnknownError(`Syntakt clear state is unknown after ${detail}. MIDI was disconnected; inspect before any further action.`);
+    }
+  }
+
   private requireIdentity(): void {
     if (!this.identity) throw new Error('Identify the Syntakt before accessing storage');
   }
@@ -244,7 +285,7 @@ export class SyntaktDevice {
 
 function parseSyntaktIdentity(ping: Uint8Array, version: Uint8Array): SyntaktIdentity {
   const capturedName = new TextEncoder().encode('Syntakt\0');
-  const requiredCommands = [0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59];
+  const requiredCommands = [0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5c];
   const descriptorLength = ping[6];
   const nameOffset = 7 + descriptorLength;
   if (ping.length !== 37 || ping[4] !== 0x81 || descriptorLength === 0 || nameOffset + capturedName.length !== ping.length
@@ -252,10 +293,17 @@ function parseSyntaktIdentity(ping: Uint8Array, version: Uint8Array): SyntaktIde
     || requiredCommands.some((command) => !ping.slice(7, nameOffset).includes(command))) {
     throw new Error('Unexpected Syntakt identity response');
   }
-  if (version.length !== 15 || version[4] !== 0x82 || text(version.slice(5, 10)) !== '0082' || version[9] !== 0 || version[14] !== 0) {
-    throw new Error('Unexpected Syntakt version response');
+  const legacyLayout = version.length === 15 && text(version.slice(5, 9)) === '0082' && version[9] === 0 && text(version.slice(10, 14)) === '1.40' && version[14] === 0;
+  // Exact OS 1.40A layout captured from the connected Syntakt.
+  const layout140A = version.length === 16 && text(version.slice(5, 9)) === '0086' && version[9] === 0 && text(version.slice(10, 15)) === '1.40A' && version[15] === 0;
+  if (version[4] !== 0x82 || (!legacyLayout && !layout140A)) {
+    throw new Error(`Unexpected Syntakt version response (${version.length} bytes: ${[...version].map((value) => value.toString(16).padStart(2, '0')).join(' ')})`);
   }
-  return { deviceId: ping[5], name: 'Syntakt', osVersion: text(version.slice(10, 14)) };
+  return { deviceId: ping[5], name: 'Syntakt', osVersion: legacyLayout ? '1.40' : '1.40A' };
+}
+
+function text(bytes: Uint8Array): string {
+  return new TextDecoder('windows-1252').decode(bytes).replace(/\0.*$/, '');
 }
 
 async function contentMatches(pcm16le: Uint8Array, expected: { pcm16le?: Uint8Array; pcmSha256?: string }): Promise<boolean> {

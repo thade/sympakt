@@ -42,7 +42,7 @@ export class WebMidiTransport implements MidiTransport {
 
   static async discover(): Promise<WebMidiDevice[]> {
     if (!WebMidiTransport.supported()) {
-      throw new MidiTransportError('Web MIDI with SysEx needs Chromium on HTTPS or localhost');
+      throw new MidiTransportError('Web MIDI with SysEx needs a secure HTTPS or localhost page');
     }
     let access: MIDIAccess;
     try {
@@ -57,7 +57,7 @@ export class WebMidiTransport implements MidiTransport {
 
   static async request(deviceId?: string): Promise<{ transport: WebMidiTransport; devices: WebMidiDevice[] }> {
     if (!WebMidiTransport.supported()) {
-      throw new MidiTransportError('Web MIDI with SysEx needs Chromium on HTTPS or localhost');
+      throw new MidiTransportError('Web MIDI with SysEx needs a secure HTTPS or localhost page');
     }
     let access: MIDIAccess;
     try {
@@ -88,7 +88,7 @@ export class WebMidiTransport implements MidiTransport {
       }
     }
     if (!devices.length) throw new MidiTransportError('No paired MIDI input/output devices were found');
-    return devices;
+    return devices.sort((left, right) => syntaktRank(left) - syntaktRank(right));
   }
 
   private static defaultDevice(devices: WebMidiDevice[]): WebMidiDevice {
@@ -128,4 +128,11 @@ export class WebMidiTransport implements MidiTransport {
     const error = new MidiTransportError(message);
     for (const listener of this.disconnectListeners) listener(error);
   }
+}
+
+function syntaktRank(device: WebMidiDevice): number {
+  const exact = (name: string): boolean => name.trim().toLowerCase() === 'elektron syntakt';
+  if (exact(device.inputName) && exact(device.outputName)) return 0;
+  if (/\bsyntakt\b/i.test(`${device.inputName} ${device.outputName}`)) return 1;
+  return 2;
 }

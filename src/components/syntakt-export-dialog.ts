@@ -1,6 +1,7 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { theme, sharedStyles } from '../styles/theme.js';
+import { formatSyntaktTransferCompletion } from '../services/syntakt-transfer.js';
 import type { BankTransferProgress } from '../services/syntakt-transfer.js';
 
 /** Final confirmation and progress view for a guarded Syntakt bank export. */
@@ -25,8 +26,9 @@ export class SyntaktExportDialog extends LitElement {
     .check input { width: auto; margin: 1px 0 0; accent-color: var(--warning); }
     .hint { margin: 5px 0 0 31px; color: var(--text-muted); font-family: var(--font-pixel); font-size: 6px; letter-spacing: 1px; line-height: 1.6; text-transform: uppercase; }
     .progress { margin-top: 14px; padding: 12px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
-    .bar { height: 6px; margin-top: 8px; border: 1px solid var(--border-color); background: #000; }
-    .bar > div { height: 100%; background: var(--warning); transition: width .12s linear; }
+    .bar { display: grid; gap: 1px; height: 6px; margin-top: 8px; overflow: hidden; border: 1px solid var(--border-color); background: #000; }
+    .segment { min-width: 0; background: var(--bg-secondary); }
+    .segment.complete { background: var(--warning); }
     .result { margin: 0; border: 1px solid var(--accent); padding: 12px; color: var(--accent); font-family: var(--font-mono); font-size: 10px; line-height: 1.45; }
     .result.error { border-color: var(--danger); color: var(--danger); }
     .button-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
@@ -53,9 +55,10 @@ export class SyntaktExportDialog extends LitElement {
 
   override render() {
     if (!this.open) return nothing;
-    const percentage = this.progress?.totalBytes
-      ? Math.round((this.progress.totalSentBytes / this.progress.totalBytes) * 100)
-      : 0;
+    const transferCount = this.progress?.totalFiles || 0;
+    const completed = this.progress?.completedFiles || 0;
+    const percentage = transferCount ? Math.round((completed / transferCount) * 100) : 0;
+    const progressLabel = this.progress ? formatProgress(this.progress, percentage) : 'Building and verifying backup ZIP…';
     return html`<div class="overlay" @click=${this.onOverlayClick}>
       <section class="dialog" @click=${(event: Event) => event.stopPropagation()} aria-label="Export bank to Syntakt">
         <div class="head"><h2>Export to Syntakt</h2><div class="subhead">Guarded USB MIDI sample-library overwrite</div></div>
@@ -63,11 +66,11 @@ export class SyntaktExportDialog extends LitElement {
           ${this.resultMessage ? html`<p class="result">${this.resultMessage}</p>` : nothing}
           ${this.failureMessage ? html`<p class="result error">${this.failureMessage}</p>` : nothing}
           ${!this.resultMessage && !this.failureMessage ? this.renderConfirmation() : nothing}
-          ${this.transferring ? html`<div class="progress">${this.progress ? `${this.progress.phase.toUpperCase()} · ${this.progress.filename} · ${percentage}%` : 'Preparing durable backups…'}<div class="bar"><div style="width:${percentage}%"></div></div></div>` : nothing}
+          ${this.transferring ? html`<div class="progress">${progressLabel}<div class="bar" role="progressbar" aria-label="Completed Syntakt transfers" aria-valuemin="0" aria-valuemax=${transferCount} aria-valuenow=${completed} style=${`grid-template-columns: repeat(${transferCount || 1}, minmax(0, 1fr))`}>${Array.from({ length: transferCount }, (_, index) => html`<span class=${index < completed ? 'segment complete' : 'segment'}></span>`)}</div></div>` : nothing}
           <div class="button-row">
             ${this.transferring
               ? html`<button class="danger" @click=${this.cancel}>Cancel export</button>`
-              : html`<button @click=${this.close}>${this.resultMessage || this.failureMessage ? 'Close' : 'Cancel'}</button>${!this.resultMessage && !this.failureMessage ? html`<button class="danger" ?disabled=${!this.ready || !this.sampleCount || !this.overwriteAcknowledged} @click=${this.confirm}>Choose backup folder & export</button>` : nothing}`}
+              : html`<button @click=${this.close}>${this.resultMessage || this.failureMessage ? 'Close' : 'Cancel'}</button>${!this.resultMessage && !this.failureMessage ? html`<button class="danger" ?disabled=${!this.ready || !this.sampleCount || !this.overwriteAcknowledged} @click=${this.confirm}>Download backup & export</button>` : nothing}`}
           </div>
         </div>
       </section>
@@ -77,8 +80,8 @@ export class SyntaktExportDialog extends LitElement {
   private renderConfirmation() {
     if (!this.ready) return html`<p class="result error">Connect and inspect a Syntakt before exporting.</p>`;
     return html`
-      <p class="notice"><strong>${this.sampleCount} sample${this.sampleCount === 1 ? '' : 's'}</strong> will overwrite the same-numbered global slots on <strong>${this.deviceName}</strong>. You will choose a local folder for WAV backups before any device write.</p>
-      <div class="summary"><span>Mapping</span><span>Sympakt slot N → Syntakt slot N</span><span>Backup</span><span>WAV + recovery manifest</span></div>
+      <p class="notice"><strong>${this.sampleCount} sample${this.sampleCount === 1 ? '' : 's'}</strong> will overwrite the same-numbered global slots on <strong>${this.deviceName}</strong>. A verified Backup ZIP downloads before any device write; import it later to restore these originals exactly.</p>
+      <div class="summary"><span>Mapping</span><span>Sympakt slot N → Syntakt slot N</span><span>Backup</span><span>Verified restore ZIP download</span></div>
       <label class="check"><input type="checkbox" .checked=${this.verifyReadback} @change=${(event: Event) => this.verifyReadback = (event.target as HTMLInputElement).checked} /><span>Verify each uploaded sample by reading it back</span></label>
       <div class="hint">Recommended · slower, but compares the device PCM after every write</div>
       <label class="check confirm"><input type="checkbox" .checked=${this.overwriteAcknowledged} @change=${(event: Event) => this.overwriteAcknowledged = (event.target as HTMLInputElement).checked} /><span>I understand this replaces ${this.sampleCount} Syntakt sample-library slot${this.sampleCount === 1 ? '' : 's'} and may affect projects that reference them.</span></label>
@@ -94,6 +97,10 @@ export class SyntaktExportDialog extends LitElement {
   private cancel(): void { this.dispatchEvent(new CustomEvent('syntakt-export-cancel', { bubbles: true, composed: true })); }
   private onOverlayClick(): void { if (!this.transferring) this.close(); }
   private close(): void { if (!this.transferring) this.dispatchEvent(new CustomEvent('dialog-close')); }
+}
+
+function formatProgress(progress: BankTransferProgress, percentage: number): string {
+  return `${progress.phase.toUpperCase()} · ${formatSyntaktTransferCompletion(progress)} COMPLETE · ${percentage}%`;
 }
 
 declare global { interface HTMLElementTagNameMap { 'sp-syntakt-export-dialog': SyntaktExportDialog; } }

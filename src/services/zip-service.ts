@@ -25,6 +25,8 @@ import {
   detectPitchWithDebug,
 } from './audio-engine.js';
 import { encodeWav } from './wav-encoder.js';
+import { tryParseSyntaktBackup } from './syntakt-backup.js';
+import type { ParsedSyntaktBackup } from './syntakt-backup.js';
 
 /**
  * Build dual-split PCM: A in first half, B reversed in second half, silence in between.
@@ -251,9 +253,16 @@ export async function exportSamplePack(
 export async function importSamplePack(
   file: File,
   enablePitchDetection = false,
-): Promise<{ slots: (Sample | null)[]; packName: string; includeOriginals: boolean; warning?: string }> {
+): Promise<{ slots: (Sample | null)[]; packName: string; includeOriginals: boolean; warning?: string; syntaktBackup?: ParsedSyntaktBackup }> {
   const arrayBuffer = await file.arrayBuffer();
-  const unzipped = unzipSync(new Uint8Array(arrayBuffer));
+  const archive = new Uint8Array(arrayBuffer);
+  // A reserved backup marker is classified and bounded before file contents
+  // inflate. It never falls through to ordinary import when malformed.
+  const syntaktBackup = await tryParseSyntaktBackup(archive);
+  if (syntaktBackup) {
+    return { slots: new Array(MAX_SLOTS).fill(null), packName: 'Syntakt Backup', includeOriginals: false, syntaktBackup };
+  }
+  const unzipped = unzipSync(archive);
 
   // Try to read metadata
   let metadata: PackMetadata | null = null;
@@ -515,7 +524,10 @@ export function downloadBlob(blob: Blob, filename: string): void {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // Browsers may resolve a clicked download asynchronously. Keep the URL alive
+  // long enough for that handoff; this function still throws synchronously if
+  // the download cannot be triggered, before a Syntakt writer is opened.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 function stripExtension(filename: string): string {

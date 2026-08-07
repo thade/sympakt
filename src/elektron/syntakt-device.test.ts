@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ElektronSession } from './elektron-session.js';
 import { decodeElektronSysex, encodeElektronSysex } from './sysex-codec.js';
-import { assertSupportedSyntaktIdentity, SyntaktDevice } from './syntakt-device.js';
+import { assertSupportedSyntaktIdentity, assertSyntaktWriteIdentity, SyntaktDevice } from './syntakt-device.js';
 import { syntaktCrc32 } from './syntakt-data-sample.js';
 import { SYNTAKT_OS_1_40_IDENTIFY_TRANSCRIPT } from './syntakt-transcripts.js';
 import type { MidiTransport } from '../midi/midi-transport.js';
@@ -110,6 +110,16 @@ function identityResponse(sequence: number, command: 0x81 | 0x82): Uint8Array {
   payload[2] = (sequence >>> 8) & 0xff;
   payload[3] = sequence & 0xff;
   return payload;
+}
+
+/** Exact decoded OS 1.40A version response captured from the connected Syntakt. */
+function identityResponse140A(sequence: number): Uint8Array {
+  return Uint8Array.of(0x31, 0xd9, (sequence >>> 8) & 0xff, sequence & 0xff, 0x82, 0x30, 0x30, 0x38, 0x36, 0, 0x31, 0x2e, 0x34, 0x30, 0x41, 0);
+}
+
+/** OS 1.40 uses the same decoded response framing with its four-byte version. */
+function identityResponse140(sequence: number): Uint8Array {
+  return Uint8Array.of(0x31, 0xd9, (sequence >>> 8) & 0xff, sequence & 0xff, 0x82, 0x30, 0x30, 0x38, 0x32, 0, 0x31, 0x2e, 0x34, 0x30, 0);
 }
 
 function slotListResponse(sequence: number): Uint8Array {
@@ -260,12 +270,37 @@ describe('Syntakt OS 1.40 data-sample reader', () => {
     await session.close();
   });
 
-  it('accepts only the exact tested firmware version', () => {
+  it('accepts only the exact tested firmware versions', () => {
     expect(() => assertSupportedSyntaktIdentity({ deviceId: 0x1e, name: 'Syntakt', osVersion: '1.40' })).not.toThrow();
-    for (const osVersion of ['1.40A', '1.400', '1.41', '']) {
+    expect(() => assertSupportedSyntaktIdentity({ deviceId: 0x1e, name: 'Syntakt', osVersion: '1.40A' })).not.toThrow();
+    expect(() => assertSyntaktWriteIdentity({ deviceId: 0x1e, name: 'Syntakt', osVersion: '1.40' })).not.toThrow();
+    expect(() => assertSyntaktWriteIdentity({ deviceId: 0x1e, name: 'Syntakt', osVersion: '1.40A' })).not.toThrow();
+    for (const osVersion of ['1.400', '1.41', '']) {
       expect(() => assertSupportedSyntaktIdentity({ deviceId: 0x1e, name: 'Syntakt', osVersion })).toThrow('supported transfer matrix');
     }
     expect(() => assertSupportedSyntaktIdentity({ deviceId: 0x1e, name: 'Digitakt', osVersion: '1.40' })).toThrow('supported transfer matrix');
+  });
+
+  it('identifies the captured 1.40A version response', async () => {
+    const transport = new FakeTransport();
+    const session = new ElektronSession(transport);
+    const device = new SyntaktDevice(session);
+    const identify = device.identify();
+    await waitForSent(transport, 1); transport.receive(identityResponse(0, 0x81));
+    await waitForSent(transport, 2); transport.receive(identityResponse140A(1));
+    await expect(identify).resolves.toMatchObject({ name: 'Syntakt', osVersion: '1.40A' });
+    await session.close();
+  });
+
+  it('identifies the OS 1.40 response framing', async () => {
+    const transport = new FakeTransport();
+    const session = new ElektronSession(transport);
+    const device = new SyntaktDevice(session);
+    const identify = device.identify();
+    await waitForSent(transport, 1); transport.receive(identityResponse(0, 0x81));
+    await waitForSent(transport, 2); transport.receive(identityResponse140(1));
+    await expect(identify).resolves.toMatchObject({ name: 'Syntakt', osVersion: '1.40' });
+    await session.close();
   });
 
   it('rejects a malformed identity descriptor before any reader or writer command', async () => {
@@ -285,7 +320,7 @@ describe('Syntakt OS 1.40 data-sample reader', () => {
   });
 
   it('requires the captured sample-library command capabilities but not their descriptor order', async () => {
-    for (const missing of [0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59]) {
+    for (const missing of [0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5c]) {
       const transport = new FakeTransport();
       const session = new ElektronSession(transport);
       const device = new SyntaktDevice(session);
@@ -380,6 +415,48 @@ describe('Syntakt OS 1.40 data-sample reader', () => {
     transport.receive(writerCloseResponse(10, 2, 111));
     await expect(upload).resolves.toBeUndefined();
     expect(progress).toEqual([99, 111]);
+  });
+
+  it('uses the captured clear command only after matching the exact target, then reads the empty sentinel', async () => {
+    const transport = new FakeTransport();
+    const session = new ElektronSession(transport);
+    const device = new SyntaktDevice(session);
+    const expectedSlot = { slot: 1, name: 'S1', storedBytes: 77_608, operations: 0x007e, hasData: true, hasMetadata: false };
+    const clear = device.clearSlot(1, expectedSlot, { name: 'TEST', pcm16le: Uint8Array.of(0x34, 0x12, 0xdc, 0xfe) });
+    await waitForSent(transport, 1); transport.receive(identityResponse(0, 0x81));
+    await waitForSent(transport, 2); transport.receive(identityResponse(1, 0x82));
+    await waitForSent(transport, 3); transport.receive(slotListResponse(2));
+    const raw = capturedContainer();
+    await waitForSent(transport, 4); transport.receive(readerOpenResponse(3));
+    await waitForSent(transport, 5); transport.receive(initialReaderProbeResponse(4));
+    await waitForSent(transport, 6); transport.receive(readerBlockResponse(5, 1, true, raw));
+    await waitForSent(transport, 7); transport.receive(readerCloseResponse(6, raw.length));
+    await waitForSent(transport, 8);
+    expect(decodeElektronSysex(transport.sent[7])).toEqual(Uint8Array.of(0, 7, 0, 0, 0x5c, ...new TextEncoder().encode('/samples/1\0')));
+    transport.receive(response(7, 0xdc, Uint8Array.of(1)));
+    await waitForSent(transport, 9); transport.receive(readerOpenResponse(8));
+    await waitForSent(transport, 10); transport.receive(initialReaderProbeResponse(9));
+    await waitForSent(transport, 11); transport.receive(readerBlockResponse(10, 1, true, capturedEmptyContainer()));
+    await waitForSent(transport, 12); transport.receive(readerCloseResponse(11, 43));
+    await expect(clear).resolves.toBeUndefined();
+  });
+
+  it('fails closed when clear acknowledgement has unexpected trailing data', async () => {
+    const transport = new FakeTransport();
+    const session = new ElektronSession(transport);
+    const device = new SyntaktDevice(session);
+    const expectedSlot = { slot: 1, name: 'S1', storedBytes: 77_608, operations: 0x007e, hasData: true, hasMetadata: false };
+    const clear = device.clearSlot(1, expectedSlot, { name: 'TEST', pcm16le: Uint8Array.of(0x34, 0x12, 0xdc, 0xfe) });
+    await waitForSent(transport, 1); transport.receive(identityResponse(0, 0x81));
+    await waitForSent(transport, 2); transport.receive(identityResponse(1, 0x82));
+    await waitForSent(transport, 3); transport.receive(slotListResponse(2));
+    const raw = capturedContainer();
+    await waitForSent(transport, 4); transport.receive(readerOpenResponse(3));
+    await waitForSent(transport, 5); transport.receive(initialReaderProbeResponse(4));
+    await waitForSent(transport, 6); transport.receive(readerBlockResponse(5, 1, true, raw));
+    await waitForSent(transport, 7); transport.receive(readerCloseResponse(6, raw.length));
+    await waitForSent(transport, 8); transport.receive(response(7, 0xdc, Uint8Array.of(1, 0)));
+    await expect(clear).rejects.toThrow('clear state is unknown');
   });
 
 });

@@ -13,6 +13,7 @@ import type { ExportOptions, Sample, SplitSample } from '../types/index.js';
 import { MAX_SLOTS, getSplitMaxDuration } from '../types/index.js';
 import { detectPitchWithDebug } from '../services/audio-engine.js';
 import { encodeWav } from '../services/wav-encoder.js';
+import { formatSyntaktTransferCompletion } from '../services/syntakt-transfer.js';
 import type { BankTransferProgress, BankTransferResult } from '../services/syntakt-transfer.js';
 import { classifySyntaktTransferResults } from '../services/syntakt-transfer-results.js';
 import { createSampleFromSyntaktSlot } from '../services/syntakt-import.js';
@@ -395,7 +396,7 @@ export class AppShell extends LitElement {
             ?disabled=${filledSlots === 0 || !this.syntaktImportReady || this.syntaktExporting}
             title=${this.syntaktImportReady ? 'Back up and export the current bank to the connected Syntakt' : 'Connect and inspect a Syntakt before exporting'}
           >
-            ${this.syntaktExporting ? this.syntaktExportProgress ? `Exporting Syntakt ${this.syntaktExportProgress.fileIndex + 1}/${this.syntaktExportProgress.fileCount}` : 'Preparing Syntakt export…' : 'Export to Syntakt'}
+            ${this.syntaktExporting ? this.syntaktExportProgress ? `Exporting Syntakt ${formatSyntaktTransferCompletion(this.syntaktExportProgress)}` : 'Preparing Syntakt export…' : 'Export to Syntakt'}
           </button>
           <button
             class="desktop-action"
@@ -472,6 +473,7 @@ export class AppShell extends LitElement {
       <sp-syntakt-transfer-dialog
         ?open=${this.syntaktTransferOpen}
         .sampleSlots=${this.bankCtrl.slots}
+        .bankRevision=${bankState.revision}
         .normalizeOnExport=${this.exportNormalize}
         @dialog-close=${() => (this.syntaktTransferOpen = false)}
         @syntakt-connection-change=${this.onSyntaktConnectionChange}
@@ -599,15 +601,29 @@ export class AppShell extends LitElement {
     this.importing = true;
     try {
       const result = await importSamplePack(file, this.pitchDetectionEnabled);
-      bankState.loadBank(result.slots);
+      const slots = result.syntaktBackup
+        ? result.syntaktBackup.manifest.entries.reduce<ReadonlyArray<Sample | null>>((bank, entry) => {
+            const original = result.syntaktBackup!.originals.get(entry.targetSlot);
+            const next = [...bank];
+            next[entry.targetSlot - 1] = original && !('empty' in original)
+              ? createSampleFromSyntaktSlot({ slot: entry.targetSlot, name: original.name, pcm16le: original.pcm16le }, this.pitchDetectionEnabled)
+              : null;
+            return next;
+          }, new Array(MAX_SLOTS).fill(null))
+        : result.slots;
+      bankState.loadBank([...slots]);
+      if (result.syntaktBackup) this.syntaktTransferDialog?.armRestore(result.syntaktBackup, bankState.revision);
+      else this.syntaktTransferDialog?.clearRestorePlan();
       this.exportIncludeOriginals = result.includeOriginals;
       this.exportPackName = result.packName;
       this.persistExportOptions();
-      const count = result.slots.filter((s) => s !== null).length;
+      const count = slots.filter((s) => s !== null).length;
       if (result.warning) {
         alert(result.warning);
       }
-      this.showNotification(`Imported "${result.packName}" — ${count} samples`);
+      this.showNotification(result.syntaktBackup
+        ? `Imported Syntakt backup — ${count} samples. Connect the Syntakt and open its library to restore.`
+        : `Imported "${result.packName}" — ${count} samples`);
     } catch (err) {
       console.error('Import failed:', err);
       this.showNotification('Failed to import sample pack', true);
@@ -651,6 +667,7 @@ export class AppShell extends LitElement {
   private onOpenSyntaktTransfer(): void {
     this.mobileMenuOpen = false;
     this.syntaktTransferOpen = true;
+    void this.syntaktTransferDialog?.openAndDiscover();
   }
 
   private onOpenSyntaktExport(): void {
