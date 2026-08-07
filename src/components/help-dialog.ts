@@ -212,11 +212,16 @@ export class HelpDialog extends LitElement {
 
             <h3>Connect / Import Syntakt</h3>
             <p>
-              Use <span class="accent">Connect Syntakt</span> in the toolbar to select a USB MIDI device, inspect its
-              global sample library, then use the main-toolbar <span class="accent">Import Syntakt</span> button. Import reads all 64 library
-              positions and replaces the browser bank after confirmation; it never modifies the device. The button becomes
-              <span class="accent">Cancel Syntakt import</span> while reading. Cancellation disconnects Sympakt’s MIDI session defensively, so reconnect before the next device action. A verified empty library position becomes an empty browser slot; any failed or malformed read, or a local edit during the read, preserves the existing browser bank. It needs
-              a secure browser with Web MIDI SysEx support. <span class="accent">Export to Syntakt</span> downloads a verified Backup ZIP before writing same-numbered slots. Import that ZIP later to load the originals and enable exact restore. Each target is checked again immediately before writing, including empty targets. Readback verification is on by default and can be turned off for a faster transfer; that result is shown as successful but unverified.
+              Use <span class="accent">Connect Syntakt</span> to choose a USB MIDI device. <span class="accent">Import Syntakt</span>
+              reads all 64 sample slots into Sympakt. It does not change the device. Import replaces your current bank after
+              confirmation. Empty Syntakt slots stay empty. Cancelling an import disconnects MIDI, so reconnect before your
+              next device action. Requires a secure page, normally HTTPS or localhost. It also needs a browser with Web MIDI SysEx
+              support, such as Chrome or Firefox.
+            </p>
+            <p>
+              <span class="accent">Export to Syntakt</span> writes occupied Sympakt slots to the same-numbered Syntakt slots. It
+              downloads a Backup ZIP before writing. Import that ZIP later to load the originals and enable <span class="accent">Restore
+              backup exactly</span>. Readback verification is on by default. You can turn it off for a faster export.
             </p>
 
             <h3>Shortcuts</h3>

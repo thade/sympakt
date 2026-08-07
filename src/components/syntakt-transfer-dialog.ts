@@ -89,18 +89,18 @@ export class SyntaktTransferDialog extends LitElement {
           <div class="subhead">USB MIDI connection</div>
         </div>
         <div class="content">
-          ${!compatible ? html`<div class="status error">This browser does not provide Web MIDI SysEx on this page.</div>` : html`
+          ${!compatible ? html`<div class="status error">This browser does not support Web MIDI SysEx here.</div>` : html`
             <div class="status ${this.connection ? 'connected' : ''} ${this.error ? 'error' : ''}">
               <span class="label">Device link</span>
               ${this.connection
-                ? html`<div class="device">${this.connection.identity.name} · OS ${this.connection.identity.osVersion}</div><div class="detail">${this.error || `${this.slots.length}/64 global library records inspected`}</div>`
-                : html`<div class="detail">${this.error || 'Connect a Syntakt over USB MIDI. Close Transfer and Overbridge first.'}</div>`}
+                ? html`<div class="device">${this.connection.identity.name} · OS ${this.connection.identity.osVersion}</div><div class="detail">${this.error || `${this.slots.length} of 64 slots read`}</div>`
+                : html`<div class="detail">${this.error || 'Connect a Syntakt over USB MIDI. Close Elektron Transfer and Overbridge first.'}</div>`}
             </div>
             ${!this.connection ? this.renderDevicePicker() : nothing}
             ${this.connection ? html`
-              <div class="inventory-summary"><span>${this.slots.length === 64 ? '64 global library records inspected' : 'No verified inventory response yet'}</span><span><button ?disabled=${!this.slots.length} @click=${this.toggleInventory}>${this.showInventory ? 'Hide slots' : 'Show 64 slots'}</button></span></div>
+              <div class="inventory-summary"><span>${this.slots.length === 64 ? '64 slots read' : 'No slot list yet'}</span><span><button ?disabled=${!this.slots.length} @click=${this.toggleInventory}>${this.showInventory ? 'Hide slots' : 'Show 64 slots'}</button></span></div>
               ${this.showInventory ? this.renderInventory() : nothing}
-              ${this.transferResults.length ? html`<div class="status ${classifySyntaktTransferResults(this.transferResults).successful ? 'connected' : 'error'}"><span class="label">Last transfer</span><div class="detail">${this.transferResults.map((result) => `${String(result.sourceSlot).padStart(2, '0')}→${String(result.targetSlot).padStart(2, '0')} ${result.state}`).join(' · ')}</div></div>` : nothing}
+              ${this.transferResults.length ? html`<div class="status ${classifySyntaktTransferResults(this.transferResults).successful ? 'connected' : 'error'}"><span class="label">Last transfer</span><div class="detail">${this.transferResults.map(formatTransferResult).join(' · ')}</div></div>` : nothing}
               ${this.recoveryBackup ? this.renderRestorePanel() : nothing}
             ` : nothing}
             <div class="button-row">
@@ -183,7 +183,7 @@ export class SyntaktTransferDialog extends LitElement {
     } catch (error) {
       this.devices = [];
       this.selectedDeviceId = '';
-      this.error = error instanceof Error ? error.message : 'Could not inspect USB MIDI devices';
+      this.error = error instanceof Error ? error.message : 'Could not find USB MIDI devices';
     } finally {
       this.discoveringDevices = false;
     }
@@ -220,7 +220,7 @@ export class SyntaktTransferDialog extends LitElement {
       this.dispatchConnectionChange(true);
       return true;
     } catch (error) {
-      await this.invalidateConnection(error instanceof Error ? error.message : 'Could not inspect Syntakt sample slots');
+      await this.invalidateConnection(error instanceof Error ? error.message : 'Could not read Syntakt slots');
       return false;
     }
     finally {
@@ -241,7 +241,7 @@ export class SyntaktTransferDialog extends LitElement {
   /** Starts the guarded main-toolbar export after its confirmation dialog. */
   async startBankExport(verifyReadback: boolean): Promise<void> {
     if (!this.connection || this.isBusy() || this.slots.length !== 64) {
-      this.dispatchExportFailure('Connect and inspect a Syntakt before exporting', false);
+      this.dispatchExportFailure('Connect a Syntakt before exporting', false);
       return;
     }
     const sourceCount = this.sampleSlots.filter((sample) => sample !== null).length;
@@ -258,7 +258,7 @@ export class SyntaktTransferDialog extends LitElement {
   private async importAllSlots(): Promise<void> {
     if (!this.connection || this.isBusy() || this.slots.length !== 64) return;
     const currentSamples = this.sampleSlots.filter((sample) => sample !== null).length;
-    if (!confirm(`Import all 64 Syntakt library positions into Sympakt? This replaces the current browser bank (${currentSamples} loaded sample${currentSamples === 1 ? '' : 's'}). The Syntakt will not be modified.`)) return;
+    if (!confirm(`Import all 64 Syntakt slots? This replaces the ${currentSamples} sample${currentSamples === 1 ? '' : 's'} currently in Sympakt. The Syntakt will not be changed.`)) return;
 
     this.importingBank = true;
     this.error = '';
@@ -289,11 +289,14 @@ export class SyntaktTransferDialog extends LitElement {
   }
 
   private renderRestorePanel() {
-    const slots = this.recoveryBackup?.manifest.entries.map((entry) => String(entry.targetSlot).padStart(2, '0')).join(', ') || '';
+    const slots = this.recoveryBackup?.manifest.entries.map((entry) => String(entry.targetSlot).padStart(2, '0')) || [];
+    const slotList = slots.length <= 2
+      ? slots.join(' and ')
+      : `${slots.slice(0, -1).join(', ')}, and ${slots[slots.length - 1]}`;
     return html`<section class="write-panel" aria-label="Exact Syntakt backup restoration">
       <div class="write-title">Restore imported Backup ZIP</div>
-      <div class="notice">Every slot is checked before any restore. A changed slot stops the whole restore; non-empty originals are always read back.</div>
-      <label class="confirmation"><input type="checkbox" .checked=${this.restoreAcknowledged} ?disabled=${this.isBusy()} @change=${(event: Event) => this.restoreAcknowledged = (event.target as HTMLInputElement).checked} /><span>I understand that slots ${slots} may be replaced by their saved original PCM.</span></label>
+      <div class="notice">Sympakt checks every slot before restoring. If any slot has changed, it stops before writing.</div>
+      <label class="confirmation"><input type="checkbox" .checked=${this.restoreAcknowledged} ?disabled=${this.isBusy()} @change=${(event: Event) => this.restoreAcknowledged = (event.target as HTMLInputElement).checked} /><span>I understand that slots ${slotList} may be replaced with their saved samples.</span></label>
       <div class="button-row"><button class="danger" ?disabled=${!this.restoreAcknowledged || this.isBusy()} @click=${this.startRestore}>Restore backup exactly</button></div>
     </section>`;
   }
@@ -422,6 +425,19 @@ export class SyntaktTransferDialog extends LitElement {
     if (this.connecting || this.refreshing || this.isBusy()) return;
     await this.invalidateConnection();
   }
+}
+
+function formatTransferResult(result: BankTransferResult): string {
+  const labels: Record<BankTransferResult['state'], string> = {
+    pending: 'waiting',
+    backed_up: 'backed up',
+    cleared: 'cleared',
+    write_started: 'writing',
+    written: 'written',
+    verified: 'verified',
+    unknown: 'unknown',
+  };
+  return `Slot ${String(result.targetSlot).padStart(2, '0')} ${labels[result.state]}`;
 }
 
 /** Prefer the actual hardware pair over virtual MIDI ports that mention it. */

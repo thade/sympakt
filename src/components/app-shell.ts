@@ -378,7 +378,7 @@ export class AppShell extends LitElement {
             class="desktop-action ${this.syntaktImporting ? 'danger' : 'primary'}"
             @click=${this.onSyntaktImportAction}
             ?disabled=${!this.syntaktImporting && !this.syntaktImportReady}
-            title=${this.syntaktImporting ? 'Cancel the current Syntakt import' : this.syntaktImportReady ? 'Read all 64 global Syntakt library positions into this browser bank' : 'Connect and inspect a Syntakt before importing'}
+            title=${this.syntaktImporting ? 'Cancel the current Syntakt import' : this.syntaktImportReady ? 'Import all 64 Syntakt slots into Sympakt' : 'Connect a Syntakt before importing'}
           >
             ${this.syntaktImporting ? `Cancel Syntakt import ${this.syntaktImportProgress?.completedSlots ?? 0}/64` : 'Import Syntakt'}
           </button>
@@ -394,7 +394,7 @@ export class AppShell extends LitElement {
             class="desktop-action danger"
             @click=${this.onOpenSyntaktExport}
             ?disabled=${filledSlots === 0 || !this.syntaktImportReady || this.syntaktExporting}
-            title=${this.syntaktImportReady ? 'Back up and export the current bank to the connected Syntakt' : 'Connect and inspect a Syntakt before exporting'}
+            title=${this.syntaktImportReady ? 'Back up and export the current bank to the connected Syntakt' : 'Connect a Syntakt before exporting'}
           >
             ${this.syntaktExporting ? this.syntaktExportProgress ? `Exporting Syntakt ${formatSyntaktTransferCompletion(this.syntaktExportProgress)}` : 'Preparing Syntakt export…' : 'Export to Syntakt'}
           </button>
@@ -622,7 +622,7 @@ export class AppShell extends LitElement {
         alert(result.warning);
       }
       this.showNotification(result.syntaktBackup
-        ? `Imported Syntakt backup — ${count} samples. Connect the Syntakt and open its library to restore.`
+        ? `Imported Syntakt backup — ${count} samples. Connect the Syntakt, then choose Restore backup exactly.`
         : `Imported "${result.packName}" — ${count} samples`);
     } catch (err) {
       console.error('Import failed:', err);
@@ -709,7 +709,7 @@ export class AppShell extends LitElement {
   private onSyntaktBankImport(event: CustomEvent<{ slots: ReadonlyArray<ImportedSyntaktSlot | null> }>): void {
     try {
       if (this.syntaktImportBankRevision !== bankState.revision) {
-        this.showNotification('Syntakt import finished, but the local bank changed — import was not applied', true);
+        this.showNotification('The import finished, but Sympakt changed while it was running. The imported samples were not applied.', true);
         return;
       }
       const samples = event.detail.slots.map((slot) => slot ? createSampleFromSyntaktSlot(slot, this.pitchDetectionEnabled) : null);
@@ -720,13 +720,13 @@ export class AppShell extends LitElement {
       this.showNotification(`Imported Syntakt library — ${count} samples`);
     } catch (error) {
       console.error('Syntakt bank import failed:', error);
-      this.showNotification('Failed to add the Syntakt library to Sympakt', true);
+      this.showNotification('Could not import the Syntakt library', true);
     }
   }
 
   private onSyntaktBankImportFailure(event: CustomEvent<{ message: string; cancelled: boolean }>): void {
     const message = event.detail.cancelled
-      ? 'Syntakt import cancelled — MIDI disconnected defensively; reconnect to continue'
+      ? 'Import cancelled. Reconnect the Syntakt to continue.'
       : `Syntakt import failed — ${event.detail.message}`;
     this.showNotification(message, !event.detail.cancelled);
   }
@@ -750,15 +750,15 @@ export class AppShell extends LitElement {
     const count = event.detail.results.length;
     const summary = classifySyntaktTransferResults(event.detail.results);
     this.syntaktExportResult = summary.verified
-      ? `Exported and read back ${count} Syntakt sample${count === 1 ? '' : 's'} successfully.`
-      : `Exported ${count} Syntakt sample${count === 1 ? '' : 's'}; readback verification was skipped.`;
+      ? `Exported and verified ${count} Syntakt sample${count === 1 ? '' : 's'}.`
+      : `Exported ${count} Syntakt sample${count === 1 ? '' : 's'} without readback verification.`;
     this.showNotification(this.syntaktExportResult, !summary.successful);
   }
 
   private onSyntaktBankExportFailure(event: CustomEvent<{ message: string; cancelled: boolean }>): void {
     this.syntaktExportFailure = event.detail.cancelled
-      ? 'Export cancelled — MIDI disconnected defensively; reconnect to continue.'
-      : `Syntakt export did not start or failed — ${event.detail.message}`;
+      ? 'Export cancelled. Reconnect the Syntakt to continue.'
+      : `Syntakt export failed — ${event.detail.message}`;
     this.showNotification(this.syntaktExportFailure, true);
   }
 

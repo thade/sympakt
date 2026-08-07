@@ -57,11 +57,10 @@ export class SyntaktExportDialog extends LitElement {
     if (!this.open) return nothing;
     const transferCount = this.progress?.totalFiles || 0;
     const completed = this.progress?.completedFiles || 0;
-    const percentage = transferCount ? Math.round((completed / transferCount) * 100) : 0;
-    const progressLabel = this.progress ? formatProgress(this.progress, percentage) : 'Building and verifying backup ZIP…';
+    const progressLabel = this.progress ? formatProgress(this.progress) : 'Preparing Backup ZIP…';
     return html`<div class="overlay" @click=${this.onOverlayClick}>
       <section class="dialog" @click=${(event: Event) => event.stopPropagation()} aria-label="Export bank to Syntakt">
-        <div class="head"><h2>Export to Syntakt</h2><div class="subhead">Guarded USB MIDI sample-library overwrite</div></div>
+        <div class="head"><h2>Export to Syntakt</h2><div class="subhead">USB MIDI export</div></div>
         <div class="content">
           ${this.resultMessage ? html`<p class="result">${this.resultMessage}</p>` : nothing}
           ${this.failureMessage ? html`<p class="result error">${this.failureMessage}</p>` : nothing}
@@ -70,7 +69,7 @@ export class SyntaktExportDialog extends LitElement {
           <div class="button-row">
             ${this.transferring
               ? html`<button class="danger" @click=${this.cancel}>Cancel export</button>`
-              : html`<button @click=${this.close}>${this.resultMessage || this.failureMessage ? 'Close' : 'Cancel'}</button>${!this.resultMessage && !this.failureMessage ? html`<button class="danger" ?disabled=${!this.ready || !this.sampleCount || !this.overwriteAcknowledged} @click=${this.confirm}>Download backup & export</button>` : nothing}`}
+              : html`<button @click=${this.close}>${this.resultMessage || this.failureMessage ? 'Close' : 'Cancel'}</button>${!this.resultMessage && !this.failureMessage ? html`<button class="danger" ?disabled=${!this.ready || !this.sampleCount || !this.overwriteAcknowledged} @click=${this.confirm}>Back up and export</button>` : nothing}`}
           </div>
         </div>
       </section>
@@ -78,13 +77,13 @@ export class SyntaktExportDialog extends LitElement {
   }
 
   private renderConfirmation() {
-    if (!this.ready) return html`<p class="result error">Connect and inspect a Syntakt before exporting.</p>`;
+    if (!this.ready) return html`<p class="result error">Connect a Syntakt before exporting.</p>`;
     return html`
-      <p class="notice"><strong>${this.sampleCount} sample${this.sampleCount === 1 ? '' : 's'}</strong> will overwrite the same-numbered global slots on <strong>${this.deviceName}</strong>. A verified Backup ZIP downloads before any device write; import it later to restore these originals exactly.</p>
-      <div class="summary"><span>Mapping</span><span>Sympakt slot N → Syntakt slot N</span><span>Backup</span><span>Verified restore ZIP download</span></div>
-      <label class="check"><input type="checkbox" .checked=${this.verifyReadback} @change=${(event: Event) => this.verifyReadback = (event.target as HTMLInputElement).checked} /><span>Verify each uploaded sample by reading it back</span></label>
-      <div class="hint">Recommended · slower, but compares the device PCM after every write</div>
-      <label class="check confirm"><input type="checkbox" .checked=${this.overwriteAcknowledged} @change=${(event: Event) => this.overwriteAcknowledged = (event.target as HTMLInputElement).checked} /><span>I understand this replaces ${this.sampleCount} Syntakt sample-library slot${this.sampleCount === 1 ? '' : 's'} and may affect projects that reference them.</span></label>
+      <p class="notice"><strong>${this.sampleCount} sample${this.sampleCount === 1 ? '' : 's'}</strong> will replace the same-numbered slots on <strong>${this.deviceName}</strong>. Sympakt downloads a Backup ZIP before writing.</p>
+      <div class="summary"><span>Mapping</span><span>Sympakt slot N → Syntakt slot N</span><span>Backup</span><span>Backup ZIP download</span></div>
+      <label class="check"><input type="checkbox" .checked=${this.verifyReadback} @change=${(event: Event) => this.verifyReadback = (event.target as HTMLInputElement).checked} /><span>Read back each uploaded sample</span></label>
+      <div class="hint">Recommended. Slower, but confirms each upload.</div>
+      <label class="check confirm"><input type="checkbox" .checked=${this.overwriteAcknowledged} @change=${(event: Event) => this.overwriteAcknowledged = (event.target as HTMLInputElement).checked} /><span>I understand this replaces ${this.sampleCount} Syntakt sample-library slot${this.sampleCount === 1 ? '' : 's'} and may affect projects that use them.</span></label>
     `;
   }
 
@@ -99,8 +98,14 @@ export class SyntaktExportDialog extends LitElement {
   private close(): void { if (!this.transferring) this.dispatchEvent(new CustomEvent('dialog-close')); }
 }
 
-function formatProgress(progress: BankTransferProgress, percentage: number): string {
-  return `${progress.phase.toUpperCase()} · ${formatSyntaktTransferCompletion(progress)} COMPLETE · ${percentage}%`;
+function formatProgress(progress: BankTransferProgress): string {
+  const labels: Record<BankTransferProgress['phase'], string> = {
+    backup: 'Backing up',
+    clear: 'Clearing',
+    write: 'Writing',
+    verify: 'Checking',
+  };
+  return `${labels[progress.phase]} · ${formatSyntaktTransferCompletion(progress)} complete`;
 }
 
 declare global { interface HTMLElementTagNameMap { 'sp-syntakt-export-dialog': SyntaktExportDialog; } }

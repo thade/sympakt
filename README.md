@@ -30,7 +30,7 @@ Create, preview, and export 64-slot sample banks for the [Elektron Syntakt](http
 - **Built-in sample editor** — trim, fade, reverse, normalize, bit crusher,  filter, and slice samples without leaving the app
 - **Virtual keyboard** — 2-octave chromatic keyboard to audition samples at different pitches
 - **Fully offline & private** — single self-contained HTML file, zero backend, session auto-saved in browser
-- **Direct Syntakt upload research** — an experimental protocol integration is being validated against real hardware before release
+- **Direct Syntakt transfer** — import, back up, and export Syntakt sample slots over USB MIDI
 
 ## Usage
 
@@ -98,9 +98,9 @@ Samples are peak-normalized by default. You can disable this in the export dialo
 
 ### Direct Syntakt Upload
 
-Use **Connect Syntakt** to choose and inspect a USB MIDI device. The verified connection remains active until you explicitly disconnect it. In a secure browser with Web MIDI SysEx support, **Import Syntakt** reads all 64 global-library positions into the browser bank without changing the device. Cancelling an import disconnects MIDI defensively; reconnect before the next operation.
+Use **Connect Syntakt** to choose a USB MIDI device. Requires a secure page, normally HTTPS or localhost. It also needs a browser with Web MIDI SysEx support, such as Chrome or Firefox. **Import Syntakt** reads all 64 global-library positions into the browser bank without changing the device. Cancelling an import disconnects MIDI defensively; reconnect before the next operation.
 
-**Export to Syntakt** writes each occupied Sympakt slot only to the same-numbered Syntakt slot. Before any write, Sympakt reads every target and builds a strict, hash-verified **Syntakt Backup ZIP**, then triggers its download. Keep that ZIP: import it through **Import .zip** to load the originals into the browser bank and enable exact restore. Every normal write checks the target again immediately before opening its writer, including empty targets. Readback verification is enabled by default and compares PCM after every upload; if disabled, a completed transfer is marked unverified. Restore preflights the whole backup and stops before changing anything if a live slot is neither its recorded original nor its recorded intended upload. The supported matrix includes OS 1.40 and 1.40A; both have passed live clear, empty readback, byte-identical restore, and checksum comparison.
+**Export to Syntakt** writes each occupied Sympakt slot only to the same-numbered Syntakt slot. Before writing, Sympakt reads every target and downloads a **Syntakt Backup ZIP**. Keep that ZIP: import it through **Import .zip** to load the originals into the browser bank and enable exact restore. Every write checks the target again immediately before opening its writer, including empty targets. Readback verification is enabled by default and compares device PCM after every upload. If you turn it off, Sympakt reports the transfer as completed without readback confirmation. After importing a Backup ZIP, **Restore backup exactly** proceeds only when each device slot still matches its saved original or the upload recorded in that backup; otherwise it stops before writing. Supports Syntakt OS 1.40 and 1.40A.
 
 ## Development
 
