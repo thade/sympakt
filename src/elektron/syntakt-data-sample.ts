@@ -20,6 +20,7 @@ const EMPTY_SLOT_TEMPLATE = Uint8Array.of(
 );
 
 export const SYNTAKT_MAX_SAMPLE_FRAMES = 48_000 * 5;
+export const SYNTAKT_DATA_SAMPLE_CONTAINER_OVERHEAD_BYTES = DATA_HEADER_BYTES + SLOT_HEADER_BYTES + FOOTER_BYTES;
 
 export interface SyntaktDataSample {
   slot: number;

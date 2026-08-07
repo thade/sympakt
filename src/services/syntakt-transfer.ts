@@ -1,7 +1,7 @@
 import { WebMidiTransport } from '../midi/web-midi-transport.js';
 import { ElektronSession } from '../elektron/elektron-session.js';
 import { SYNTAKT_WRITE_SUPPORTED_OS_VERSIONS, SyntaktDevice, SyntaktWriteStateUnknownError } from '../elektron/syntakt-device.js';
-import { buildSyntaktDataSample } from '../elektron/syntakt-data-sample.js';
+import { buildSyntaktDataSample, SYNTAKT_DATA_SAMPLE_CONTAINER_OVERHEAD_BYTES } from '../elektron/syntakt-data-sample.js';
 import type { SyntaktSampleSlot } from '../elektron/syntakt-slot-list.js';
 import { prepareSampleExports } from './zip-service.js';
 import type { PreparedSampleExport } from './zip-service.js';
@@ -65,7 +65,7 @@ export async function uploadPreparedSamples(connection: SyntaktConnection, prepa
     buildSyntaktDataSample(mapping.targetSlot, intendedName, item.pcm16le);
     return { sourceSlot: item.slot, targetSlot: mapping.targetSlot, intendedName, intendedPcm16le: new Uint8Array(item.pcm16le), expectedTarget: mapping.expectedTarget };
   });
-  const totalBytes = prepared.reduce((total, item) => total + item.pcm16le.length + 107, 0);
+  const totalBytes = prepared.reduce((total, item) => total + item.pcm16le.length + SYNTAKT_DATA_SAMPLE_CONTAINER_OVERHEAD_BYTES, 0);
   const results = intents.map((intent, index) => ({ sourceSlot: intent.sourceSlot, targetSlot: intent.targetSlot, filename: prepared[index].filename, state: 'pending' as BankTransferState }));
   const originals: SyntaktBackupContent[] = [];
   let totalSentBytes = 0;
@@ -76,7 +76,7 @@ export async function uploadPreparedSamples(connection: SyntaktConnection, prepa
       const read = await connection.device.downloadSlot(intent.targetSlot, options.signal);
       if (read.empty) originals.push({ slot: intent.targetSlot, empty: true });
       else {
-        assertRestorableSyntaktName(read.name);
+        assertBackupTargetName(intent.targetSlot, read.name);
         buildSyntaktDataSample(intent.targetSlot, read.name, read.pcm16le);
         originals.push(backupFromPcm(intent.targetSlot, read.name, read.pcm16le));
       }
@@ -95,16 +95,16 @@ export async function uploadPreparedSamples(connection: SyntaktConnection, prepa
       await options.onProgress({
         phase: 'write', fileIndex: index, fileCount: prepared.length, filename: prepared[index].filename,
         completedFiles: index, totalFiles: prepared.length,
-        fileSentBytes: 0, fileTotalBytes: intent.intendedPcm16le.length + 107, totalSentBytes, totalBytes,
+        fileSentBytes: 0, fileTotalBytes: intent.intendedPcm16le.length + SYNTAKT_DATA_SAMPLE_CONTAINER_OVERHEAD_BYTES, totalSentBytes, totalBytes,
       });
       await connection.device.uploadSlot(intent.targetSlot, intent.intendedName, intent.intendedPcm16le, intent.expectedTarget, 'empty' in original ? { empty: true } : { name: original.name, pcm16le: original.pcm16le }, () => undefined, options.signal);
       results[index].state = 'written';
-      const writerBytes = intent.intendedPcm16le.length + 107;
+      const writerBytes = intent.intendedPcm16le.length + SYNTAKT_DATA_SAMPLE_CONTAINER_OVERHEAD_BYTES;
       totalSentBytes += writerBytes;
       await options.onProgress(progress('write', index, prepared.length, prepared[index], writerBytes, totalSentBytes, totalBytes));
       if (options.verifyReadback !== false) {
         const readback = await connection.device.downloadSlot(intent.targetSlot, options.signal);
-        if (readback.empty || readback.name !== intent.intendedName || !bytesEqual(readback.pcm16le, intent.intendedPcm16le)) throw new Error(`Readback verification failed for Syntakt slot ${intent.targetSlot}`);
+        if (readback.empty || readback.name !== intent.intendedName || !bytesEqual(readback.pcm16le, intent.intendedPcm16le)) throw new Error(`Slot ${intent.targetSlot} didn't read back as expected. Check it on the Syntakt.`);
         results[index].state = 'verified';
         await options.onProgress(progress('verify', index, prepared.length, prepared[index], writerBytes, totalSentBytes, totalBytes));
       }
@@ -119,7 +119,11 @@ export async function restoreSyntaktBackup(connection: SyntaktConnection, backup
   if (!SYNTAKT_WRITE_SUPPORTED_OS_VERSIONS.has(connection.identity.osVersion)) throw new Error(`Syntakt OS ${connection.identity.osVersion} is read-only until direct-write conformance is complete`);
   const entries: SyntaktRestoreEntry[] = backup.manifest.entries.map((entry) => ({ targetSlot: entry.targetSlot, original: backup.originals.get(entry.targetSlot)!, intendedName: entry.intended.name, intendedPcmSha256: entry.intended.pcmSha256 }));
   if (!entries.length || entries.some((entry) => !entry.original)) throw new Error('Invalid Syntakt backup restore data');
-  const totalBytes = entries.reduce((sum, entry) => sum + ('empty' in entry.original ? 0 : entry.original.pcm16le.length + 107), 0);
+  // Validate every write container before the read-only device preflight can advance to a writer.
+  for (const entry of entries) {
+    if (!('empty' in entry.original)) buildSyntaktDataSample(entry.targetSlot, entry.original.name, entry.original.pcm16le);
+  }
+  const totalBytes = entries.reduce((sum, entry) => sum + ('empty' in entry.original ? 0 : entry.original.pcm16le.length + SYNTAKT_DATA_SAMPLE_CONTAINER_OVERHEAD_BYTES), 0);
   const results = entries.map((entry) => ({ sourceSlot: entry.targetSlot, targetSlot: entry.targetSlot, filename: 'empty' in entry.original ? 'empty' : entry.original.name, state: 'pending' as BankTransferState }));
   const candidates: Array<{ index: number; entry: SyntaktRestoreEntry; expected: SyntaktSampleSlot }> = [];
   try {
@@ -138,7 +142,12 @@ export async function restoreSyntaktBackup(connection: SyntaktConnection, backup
     for (const { index, entry, expected } of candidates) {
       throwIfAborted(options.signal);
       if ('empty' in entry.original) {
-        await connection.device.clearSlot(entry.targetSlot, expected, { name: entry.intendedName, pcmSha256: entry.intendedPcmSha256 }, options.signal);
+        try {
+          await connection.device.clearSlot(entry.targetSlot, expected, { name: entry.intendedName, pcmSha256: entry.intendedPcmSha256 }, options.signal);
+        } catch (error) {
+          if (error instanceof SyntaktWriteStateUnknownError) results[index].state = 'unknown';
+          throw error;
+        }
         results[index].state = 'verified';
         options.onProgress({ phase: 'clear', fileIndex: index, fileCount: entries.length, completedFiles: index + 1, totalFiles: entries.length, filename: 'empty', fileSentBytes: 0, fileTotalBytes: 0, totalSentBytes, totalBytes });
         continue;
@@ -150,9 +159,9 @@ export async function restoreSyntaktBackup(connection: SyntaktConnection, backup
       }, options.signal);
       const readback = await connection.device.downloadSlot(entry.targetSlot, options.signal);
       if (!sameOriginal(readback, original)) throw new Error(`Syntakt recovery verification failed for slot ${entry.targetSlot}`);
-      totalSentBytes += original.pcm16le.length + 107;
+      totalSentBytes += original.pcm16le.length + SYNTAKT_DATA_SAMPLE_CONTAINER_OVERHEAD_BYTES;
       results[index].state = 'verified';
-      options.onProgress({ phase: 'verify', fileIndex: index, fileCount: entries.length, completedFiles: index + 1, totalFiles: entries.length, filename: original.name, fileSentBytes: original.pcm16le.length + 107, fileTotalBytes: original.pcm16le.length + 107, totalSentBytes, totalBytes });
+      options.onProgress({ phase: 'verify', fileIndex: index, fileCount: entries.length, completedFiles: index + 1, totalFiles: entries.length, filename: original.name, fileSentBytes: original.pcm16le.length + SYNTAKT_DATA_SAMPLE_CONTAINER_OVERHEAD_BYTES, fileTotalBytes: original.pcm16le.length + SYNTAKT_DATA_SAMPLE_CONTAINER_OVERHEAD_BYTES, totalSentBytes, totalBytes });
     }
     return results;
   } catch (error) { throw transferError(connection, error, results); }
@@ -162,11 +171,11 @@ function transferError(connection: SyntaktConnection, error: unknown, results: r
   const active = results.find((result) => result.state === 'write_started');
   if (active && error instanceof SyntaktWriteStateUnknownError) active.state = 'unknown';
   void connection.session.close().catch(() => undefined);
-  const message = error instanceof DOMException && error.name === 'AbortError' ? 'Transfer cancelled. The MIDI session was closed; reconnect before continuing.' : asError(error).message;
+  const message = error instanceof DOMException && error.name === 'AbortError' ? 'Transfer cancelled. Reconnect the Syntakt to continue.' : asError(error).message;
   return new SyntaktBatchTransferError(message, results);
 }
 function progress(phase: 'backup' | 'clear' | 'write' | 'verify', fileIndex: number, fileCount: number, item: PreparedSampleExport, sentBytes: number, totalSentBytes: number, totalBytes: number): BankTransferProgress {
-  const fileTotalBytes = item.pcm16le.length + 107;
+  const fileTotalBytes = item.pcm16le.length + SYNTAKT_DATA_SAMPLE_CONTAINER_OVERHEAD_BYTES;
   return { phase, fileIndex, fileCount, completedFiles: phase === 'write' && sentBytes < fileTotalBytes ? fileIndex : fileIndex + 1, totalFiles: fileCount, filename: item.filename, fileSentBytes: sentBytes, fileTotalBytes, totalSentBytes, totalBytes };
 }
 function validateMappings(sourceSlots: readonly number[], mappings: readonly ExplicitSlotMapping[]): Map<number, ExplicitSlotMapping> {
@@ -178,6 +187,10 @@ function validateMappings(sourceSlots: readonly number[], mappings: readonly Exp
     bySource.set(mapping.sourceSlot, mapping); targets.add(mapping.targetSlot);
   }
   return bySource;
+}
+function assertBackupTargetName(slot: number, name: string): void {
+  try { assertRestorableSyntaktName(name); }
+  catch { throw new Error(`Syntakt slot ${slot} cannot be backed up: sample names must be 1–16 ASCII bytes`); }
 }
 function sameOriginal(current: Awaited<ReturnType<SyntaktDevice['downloadSlot']>>, original: SyntaktBackupContent): boolean { return 'empty' in original ? current.empty === true : !current.empty && current.name === original.name && bytesEqual(current.pcm16le, original.pcm16le); }
 function throwIfAborted(signal?: AbortSignal): void { if (signal?.aborted) throw new DOMException('Transfer cancelled', 'AbortError'); }

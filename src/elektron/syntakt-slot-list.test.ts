@@ -57,7 +57,7 @@ describe('Syntakt OS 1.40 slot listing', () => {
     expect(() => parseSyntaktSampleSlotList(mismatch)).toThrow('count');
     const unknownHeader = listFixture();
     unknownHeader[6] = 1;
-    expect(() => parseSyntaktSampleSlotList(unknownHeader)).toThrow('header');
+    expect(() => parseSyntaktSampleSlotList(unknownHeader)).toThrow("Couldn't read the Syntakt slot list");
   });
 
   it('accepts only the captured zero-byte blank global-library record', () => {

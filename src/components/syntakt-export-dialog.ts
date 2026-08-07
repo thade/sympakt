@@ -79,7 +79,7 @@ export class SyntaktExportDialog extends LitElement {
   private renderConfirmation() {
     if (!this.ready) return html`<p class="result error">Connect a Syntakt before exporting.</p>`;
     return html`
-      <p class="notice"><strong>${this.sampleCount} sample${this.sampleCount === 1 ? '' : 's'}</strong> will replace the same-numbered slots on <strong>${this.deviceName}</strong>. Sympakt downloads a Backup ZIP before writing.</p>
+      <p class="notice"><strong>${this.sampleCount} sample${this.sampleCount === 1 ? '' : 's'}</strong> will replace the same-numbered slots on <strong>${this.deviceName}</strong>. A Backup ZIP downloads first.</p>
       <div class="summary"><span>Mapping</span><span>Sympakt slot N → Syntakt slot N</span><span>Backup</span><span>Backup ZIP download</span></div>
       <label class="check"><input type="checkbox" .checked=${this.verifyReadback} @change=${(event: Event) => this.verifyReadback = (event.target as HTMLInputElement).checked} /><span>Read back each uploaded sample</span></label>
       <div class="hint">Recommended. Slower, but confirms each upload.</div>

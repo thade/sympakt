@@ -24,7 +24,8 @@ export function parseSyntaktSampleSlotList(response: Uint8Array): SyntaktSampleS
   // captured global-data-sample listing marker (0x41), then the record count.
   if (response.slice(6, 13).some((value) => value !== 0) || response[13] !== 0x41) {
     const observed = [...response.slice(0, 24)].map((value) => value.toString(16).padStart(2, '0')).join(' ');
-    throw new Error(`Unexpected Syntakt sample-slot list header (${response.length} bytes: ${observed})`);
+    console.error('Unexpected Syntakt sample-slot list header', `${response.length} bytes:`, observed);
+    throw new Error("Couldn't read the Syntakt slot list.");
   }
   const declaredEntries = readUint32BE(response, 14);
   if (declaredEntries > SYNTAKT_SAMPLE_SLOT_COUNT) throw new Error('Syntakt sample-slot list exceeds the known slot count');

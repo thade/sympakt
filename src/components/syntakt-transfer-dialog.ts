@@ -89,23 +89,23 @@ export class SyntaktTransferDialog extends LitElement {
           <div class="subhead">USB MIDI connection</div>
         </div>
         <div class="content">
-          ${!compatible ? html`<div class="status error">This browser does not support Web MIDI SysEx here.</div>` : html`
+          ${!compatible ? html`<div class="status error">This browser can't use Web MIDI here. Try Chrome or Firefox on an HTTPS or localhost page.</div>` : html`
             <div class="status ${this.connection ? 'connected' : ''} ${this.error ? 'error' : ''}">
-              <span class="label">Device link</span>
+              <span class="label">Device</span>
               ${this.connection
                 ? html`<div class="device">${this.connection.identity.name} · OS ${this.connection.identity.osVersion}</div><div class="detail">${this.error || `${this.slots.length} of 64 slots read`}</div>`
                 : html`<div class="detail">${this.error || 'Connect a Syntakt over USB MIDI. Close Elektron Transfer and Overbridge first.'}</div>`}
             </div>
             ${!this.connection ? this.renderDevicePicker() : nothing}
             ${this.connection ? html`
-              <div class="inventory-summary"><span>${this.slots.length === 64 ? '64 slots read' : 'No slot list yet'}</span><span><button ?disabled=${!this.slots.length} @click=${this.toggleInventory}>${this.showInventory ? 'Hide slots' : 'Show 64 slots'}</button></span></div>
+              <div class="inventory-summary"><span>${this.slots.length === 64 ? '64 slots read' : 'No slots read yet'}</span><span><button ?disabled=${!this.slots.length} @click=${this.toggleInventory}>${this.showInventory ? 'Hide slots' : 'Show 64 slots'}</button></span></div>
               ${this.showInventory ? this.renderInventory() : nothing}
               ${this.transferResults.length ? html`<div class="status ${classifySyntaktTransferResults(this.transferResults).successful ? 'connected' : 'error'}"><span class="label">Last transfer</span><div class="detail">${this.transferResults.map(formatTransferResult).join(' · ')}</div></div>` : nothing}
               ${this.recoveryBackup ? this.renderRestorePanel() : nothing}
             ` : nothing}
             <div class="button-row">
               ${this.isBusy() ? html`<button class="danger" @click=${this.cancelTransfer}>Cancel ${this.importingBank ? 'import' : 'transfer'}</button>` : html`${this.connection ? html`<button class="danger" @click=${this.disconnect}>Disconnect</button>` : nothing}<button @click=${this.close}>Close</button>`}
-              ${this.connection ? html`<button class="primary" ?disabled=${this.refreshing || this.isBusy()} @click=${this.refresh}>${this.refreshing ? 'Refreshing…' : 'Refresh inventory'}</button>` : html`<button class="primary" ?disabled=${this.connecting || !this.devices.length} @click=${this.connect}>${this.connecting ? 'Connecting…' : 'Connect selected device'}</button>`}
+              ${this.connection ? html`<button class="primary" ?disabled=${this.refreshing || this.isBusy()} @click=${this.refresh}>${this.refreshing ? 'Refreshing…' : 'Refresh slots'}</button>` : html`<button class="primary" ?disabled=${this.connecting || !this.devices.length} @click=${this.connect}>${this.connecting ? 'Connecting…' : 'Connect selected device'}</button>`}
             </div>
           `}
         </div>
@@ -114,14 +114,14 @@ export class SyntaktTransferDialog extends LitElement {
   }
 
   private renderInventory() {
-    return html`<div class="inventory" aria-label="Syntakt global sample library slots">
+    return html`<div class="inventory" aria-label="Syntakt sample slots">
       <div class="inventory-head"><span>Slot</span><span>Name</span><span>Stored</span><span>Data</span></div>
       ${this.slots.map((slot) => html`
         <div class="slot">
           <span class="slot-number">${String(slot.slot).padStart(2, '0')}</span>
           <span class="slot-name" title=${slot.name}>${slot.name}</span>
           <span class="slot-size">${formatBytes(slot.storedBytes)}</span>
-          <span class="slot-state" data-present=${slot.hasData}>${slot.hasData ? 'present' : 'unknown'}</span>
+          <span class="slot-state" data-present=${slot.hasData}>${slot.hasData ? 'present' : (!slot.name && !slot.storedBytes ? 'empty' : 'unknown')}</span>
         </div>
       `)}
     </div>`;
@@ -246,7 +246,7 @@ export class SyntaktTransferDialog extends LitElement {
     }
     const sourceCount = this.sampleSlots.filter((sample) => sample !== null).length;
     if (!sourceCount) {
-      this.dispatchExportFailure('Load at least one Sympakt sample before exporting', false);
+      this.dispatchExportFailure('Load at least one sample before exporting', false);
       return;
     }
     await this.runTransfer(verifyReadback);
@@ -258,7 +258,7 @@ export class SyntaktTransferDialog extends LitElement {
   private async importAllSlots(): Promise<void> {
     if (!this.connection || this.isBusy() || this.slots.length !== 64) return;
     const currentSamples = this.sampleSlots.filter((sample) => sample !== null).length;
-    if (!confirm(`Import all 64 Syntakt slots? This replaces the ${currentSamples} sample${currentSamples === 1 ? '' : 's'} currently in Sympakt. The Syntakt will not be changed.`)) return;
+    if (!confirm(`Import all 64 Syntakt slots? This replaces the ${currentSamples} sample${currentSamples === 1 ? '' : 's'} currently in Sympakt. Your Syntakt is not changed.`)) return;
 
     this.importingBank = true;
     this.error = '';
@@ -293,8 +293,8 @@ export class SyntaktTransferDialog extends LitElement {
     const slotList = slots.length <= 2
       ? slots.join(' and ')
       : `${slots.slice(0, -1).join(', ')}, and ${slots[slots.length - 1]}`;
-    return html`<section class="write-panel" aria-label="Exact Syntakt backup restoration">
-      <div class="write-title">Restore imported Backup ZIP</div>
+    return html`<section class="write-panel" aria-label="Restore from Backup ZIP">
+      <div class="write-title">Restore from Backup ZIP</div>
       <div class="notice">Sympakt checks every slot before restoring. If any slot has changed, it stops before writing.</div>
       <label class="confirmation"><input type="checkbox" .checked=${this.restoreAcknowledged} ?disabled=${this.isBusy()} @change=${(event: Event) => this.restoreAcknowledged = (event.target as HTMLInputElement).checked} /><span>I understand that slots ${slotList} may be replaced with their saved samples.</span></label>
       <div class="button-row"><button class="danger" ?disabled=${!this.restoreAcknowledged || this.isBusy()} @click=${this.startRestore}>Restore backup exactly</button></div>
@@ -435,7 +435,7 @@ function formatTransferResult(result: BankTransferResult): string {
     write_started: 'writing',
     written: 'written',
     verified: 'verified',
-    unknown: 'unknown',
+    unknown: 'state unknown',
   };
   return `Slot ${String(result.targetSlot).padStart(2, '0')} ${labels[result.state]}`;
 }

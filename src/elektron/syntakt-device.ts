@@ -194,45 +194,45 @@ export class SyntaktDevice {
         const identity = await this.identifyWith(request, signal);
         assertSyntaktWriteIdentity(identity);
         const currentSlot = (await this.listSampleSlotsWith(request, signal)).find((entry) => entry.slot === slot);
-        if (!currentSlot || !sameSlotRecord(currentSlot, expectedSlot)) throw new Error('Syntakt slot metadata changed before write; inspect and confirm again');
+        if (!currentSlot || !sameSlotRecord(currentSlot, expectedSlot)) throw new Error('That slot changed on the device, so nothing was written. Refresh slots and try again.');
         const current = await this.downloadSlotWith(request, slot, signal);
         if ((expected.empty && !current.empty) || (!expected.empty && (current.empty || !expected.name || current.name !== expected.name || !(await contentMatches(current.pcm16le, expected)))) ) {
-          throw new Error(`Syntakt slot ${slot} changed after backup; writer was not opened`);
+          throw new Error(`Slot ${slot} changed after the backup, so nothing was written. Refresh slots and try again.`);
         }
 
         const totalBytes = upload.content.length + upload.footer.length;
         writeAttempted = true;
         const open = await request(0x57, append(writeUint32BE(totalBytes), dataSamplePath(slot)), { signal });
-      if (!commandAccepted(open) || open.length < 10) throw new Error(`Syntakt refused writer for sample slot ${slot}`);
-      const writerId = readUint32BE(open, 6);
-      if (!writerId) throw new Error('Unexpected Syntakt writer configuration');
+        if (!commandAccepted(open) || open.length < 10) throw new Error(`Syntakt refused writer for sample slot ${slot}`);
+        const writerId = readUint32BE(open, 6);
+        if (!writerId) throw new Error('Unexpected Syntakt writer configuration');
 
-      let sequence = 0;
-      let sentBytes = 0;
-      for (const part of [upload.content, upload.footer]) {
-        for (let offset = 0; offset < part.length; offset += DATA_SAMPLE_BLOCK_BYTES) {
-          if (sequence >= MAX_DATA_SAMPLE_WRITE_BLOCKS) throw new Error('Syntakt sample writer exceeded its safe block limit');
-          const block = part.slice(offset, Math.min(offset + DATA_SAMPLE_BLOCK_BYTES, part.length));
-          const response = await request(0x58, append(writeUint32BE(writerId), writeUint32BE(sequence), writeUint32BE(syntaktCrc32(block)), writeUint32BE(block.length), block), { signal });
-          if (!commandAccepted(response) || response.length < 18) throw new Error('Syntakt rejected sample write block');
-          if (readUint32BE(response, 6) !== writerId || readUint32BE(response, 10) !== sequence) throw new Error('Syntakt writer response did not match its request');
-          sentBytes += block.length;
-          if (readUint32BE(response, 14) !== sentBytes) throw new Error('Syntakt writer did not confirm the expected byte total');
-          onProgress({ sentBytes, totalBytes });
-          sequence++;
+        let sequence = 0;
+        let sentBytes = 0;
+        for (const part of [upload.content, upload.footer]) {
+          for (let offset = 0; offset < part.length; offset += DATA_SAMPLE_BLOCK_BYTES) {
+            if (sequence >= MAX_DATA_SAMPLE_WRITE_BLOCKS) throw new Error('Syntakt sample writer exceeded its safe block limit');
+            const block = part.slice(offset, Math.min(offset + DATA_SAMPLE_BLOCK_BYTES, part.length));
+            const response = await request(0x58, append(writeUint32BE(writerId), writeUint32BE(sequence), writeUint32BE(syntaktCrc32(block)), writeUint32BE(block.length), block), { signal });
+            if (!commandAccepted(response) || response.length < 18) throw new Error('Syntakt rejected sample write block');
+            if (readUint32BE(response, 6) !== writerId || readUint32BE(response, 10) !== sequence) throw new Error('Syntakt writer response did not match its request');
+            sentBytes += block.length;
+            if (readUint32BE(response, 14) !== sentBytes) throw new Error('Syntakt writer did not confirm the expected byte total');
+            onProgress({ sentBytes, totalBytes });
+            sequence++;
+          }
         }
-      }
 
         const close = await request(0x59, append(writeUint32BE(writerId), writeUint32BE(totalBytes)), { signal });
-      if (!commandAccepted(close) || close.length < 14 || readUint32BE(close, 6) !== writerId || readUint32BE(close, 10) !== totalBytes) {
-        throw new Error('Syntakt did not confirm writer close');
-      }
+        if (!commandAccepted(close) || close.length < 14 || readUint32BE(close, 6) !== writerId || readUint32BE(close, 10) !== totalBytes) {
+          throw new Error('Syntakt did not confirm writer close');
+        }
       });
     } catch (error) {
       if (!writeAttempted) throw error;
       await this.session.close().catch(() => undefined);
       const detail = error instanceof Error ? error.message : 'unknown error';
-      throw new SyntaktWriteStateUnknownError(`Syntakt write state is unknown after ${detail}. MIDI was disconnected; inspect before any further action.`);
+      throw new SyntaktWriteStateUnknownError(`The write may not have finished (${detail}). Sympakt disconnected — check that slot on the Syntakt before continuing.`);
     }
   }
 
@@ -249,7 +249,7 @@ export class SyntaktDevice {
         const identity = await this.identifyWith(request, signal);
         assertSyntaktWriteIdentity(identity);
         const currentSlot = (await this.listSampleSlotsWith(request, signal)).find((entry) => entry.slot === slot);
-        if (!currentSlot || !sameSlotRecord(currentSlot, expectedSlot)) throw new Error('Syntakt slot metadata changed before clear; inspect and confirm again');
+        if (!currentSlot || !sameSlotRecord(currentSlot, expectedSlot)) throw new Error('That slot changed on the device, so nothing was cleared. Refresh slots and try again.');
         const current = await this.downloadSlotWith(request, slot, signal);
         const matches = expectedContent.empty === true
           ? current.empty
@@ -265,7 +265,7 @@ export class SyntaktDevice {
       if (!clearAttempted) throw error;
       await this.session.close().catch(() => undefined);
       const detail = error instanceof Error ? error.message : 'unknown error';
-      throw new SyntaktWriteStateUnknownError(`Syntakt clear state is unknown after ${detail}. MIDI was disconnected; inspect before any further action.`);
+      throw new SyntaktWriteStateUnknownError(`The clear may not have finished (${detail}). Sympakt disconnected — check that slot on the Syntakt before continuing.`);
     }
   }
 
@@ -297,7 +297,8 @@ function parseSyntaktIdentity(ping: Uint8Array, version: Uint8Array): SyntaktIde
   // Exact OS 1.40A layout captured from the connected Syntakt.
   const layout140A = version.length === 16 && text(version.slice(5, 9)) === '0086' && version[9] === 0 && text(version.slice(10, 15)) === '1.40A' && version[15] === 0;
   if (version[4] !== 0x82 || (!legacyLayout && !layout140A)) {
-    throw new Error(`Unexpected Syntakt version response (${version.length} bytes: ${[...version].map((value) => value.toString(16).padStart(2, '0')).join(' ')})`);
+    console.error('Unexpected Syntakt version response', `${version.length} bytes:`, [...version].map((value) => value.toString(16).padStart(2, '0')).join(' '));
+    throw new Error("Couldn't read the Syntakt OS version.");
   }
   return { deviceId: ping[5], name: 'Syntakt', osVersion: legacyLayout ? '1.40' : '1.40A' };
 }

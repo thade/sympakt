@@ -256,8 +256,8 @@ export async function importSamplePack(
 ): Promise<{ slots: (Sample | null)[]; packName: string; includeOriginals: boolean; warning?: string; syntaktBackup?: ParsedSyntaktBackup }> {
   const arrayBuffer = await file.arrayBuffer();
   const archive = new Uint8Array(arrayBuffer);
-  // A reserved backup marker is classified and bounded before file contents
-  // inflate. It never falls through to ordinary import when malformed.
+  // Only an explicit Backup ZIP header enters the strict backup path.
+  // Every other archive follows the normal sample-pack importer unchanged.
   const syntaktBackup = await tryParseSyntaktBackup(archive);
   if (syntaktBackup) {
     return { slots: new Array(MAX_SLOTS).fill(null), packName: 'Syntakt Backup', includeOriginals: false, syntaktBackup };

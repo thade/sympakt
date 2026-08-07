@@ -87,7 +87,7 @@ export class WebMidiTransport implements MidiTransport {
         devices.push({ id: JSON.stringify([input.id, output.id]), input, output, inputName: input.name ?? 'MIDI input', outputName: output.name ?? 'MIDI output' });
       }
     }
-    if (!devices.length) throw new MidiTransportError('No paired MIDI input/output devices were found');
+    if (!devices.length) throw new MidiTransportError('No MIDI devices found. Connect the Syntakt over USB and switch it on.');
     return devices.sort((left, right) => syntaktRank(left) - syntaktRank(right));
   }
 

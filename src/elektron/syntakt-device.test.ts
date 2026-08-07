@@ -363,7 +363,7 @@ describe('Syntakt OS 1.40 data-sample reader', () => {
     await waitForSent(transport, 5); transport.receive(initialReaderProbeResponse(4));
     await waitForSent(transport, 6); transport.receive(readerBlockResponse(5, 1, true, raw));
     await waitForSent(transport, 7); transport.receive(readerCloseResponse(6, raw.length));
-    await expect(upload).rejects.toThrow('writer was not opened');
+    await expect(upload).rejects.toThrow('nothing was written');
     expect(transport.sent.map((message) => decodeElektronSysex(message)?.[4])).not.toContain(0x57);
     await session.close();
   });
@@ -456,7 +456,7 @@ describe('Syntakt OS 1.40 data-sample reader', () => {
     await waitForSent(transport, 6); transport.receive(readerBlockResponse(5, 1, true, raw));
     await waitForSent(transport, 7); transport.receive(readerCloseResponse(6, raw.length));
     await waitForSent(transport, 8); transport.receive(response(7, 0xdc, Uint8Array.of(1, 0)));
-    await expect(clear).rejects.toThrow('clear state is unknown');
+    await expect(clear).rejects.toThrow('The clear may not have finished');
   });
 
 });

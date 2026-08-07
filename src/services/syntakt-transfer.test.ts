@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formatSyntaktTransferCompletion, restoreSyntaktBackup, uploadPreparedSamples } from './syntakt-transfer.js';
 import { backupFromPcm, createVerifiedSyntaktBackup } from './syntakt-backup.js';
+import { SyntaktWriteStateUnknownError } from '../elektron/syntakt-device.js';
 import type { PreparedSampleExport } from './zip-service.js';
 import type { SyntaktSampleSlot } from '../elektron/syntakt-slot-list.js';
 
@@ -104,10 +105,43 @@ describe('guarded Syntakt transfer', () => {
     expect(cancelledEvents).toEqual([]);
   });
 
+  it('names the slot when an existing target cannot be backed up', async () => {
+    enabled(); const events: string[] = []; const link = connection(events, new Map([[1, sample(1, 'é', Uint8Array.of(1, 0))]]));
+    await expect(uploadPreparedSamples(link, [prepared(1, '01_NEW.wav', Uint8Array.of(2, 0))], {
+      mappings: [{ sourceSlot: 1, targetSlot: 1, expectedTarget: record(1) }], onBackupReady: () => undefined, onProgress: () => undefined,
+    })).rejects.toThrow('Syntakt slot 1 cannot be backed up');
+    expect(events).not.toContain('write-1');
+  });
+
   it('preflights every restore entry before any write', async () => {
     enabled(); const events: string[] = []; const link = connection(events, new Map([[1, sample(1, 'OTHER', Uint8Array.of(9, 0))]]));
     const { parsed } = await createVerifiedSyntaktBackup([{ targetSlot: 1, intendedName: 'NEW', intendedPcm16le: Uint8Array.of(2, 0) }], [backupFromPcm(1, 'OLD', Uint8Array.of(1, 0))]);
     await expect(restoreSyntaktBackup(link, parsed, { onProgress: () => undefined })).rejects.toThrow('original or intended');
     expect(events).not.toContain('write-1');
+  });
+
+  it('reports an attempted clear with unknown state when the device cannot confirm it', async () => {
+    enabled(); const events: string[] = []; const link = connection(events, new Map([[1, sample(1, 'NEW', Uint8Array.of(2, 0))]]));
+    link.device.clearSlot = async (slot: number) => {
+      events.push(`clear-${slot}`);
+      throw new SyntaktWriteStateUnknownError('clear state is unknown');
+    };
+    const { parsed } = await createVerifiedSyntaktBackup([{ targetSlot: 1, intendedName: 'NEW', intendedPcm16le: Uint8Array.of(2, 0) }], [{ slot: 1, empty: true }]);
+    await expect(restoreSyntaktBackup(link, parsed, { onProgress: () => undefined })).rejects.toMatchObject({
+      results: [expect.objectContaining({ targetSlot: 1, state: 'unknown' })],
+    });
+    expect(events).toContain('clear-1');
+  });
+
+  it('leaves a clear pending when the device rejects it before sending', async () => {
+    enabled(); const events: string[] = []; const link = connection(events, new Map([[1, sample(1, 'NEW', Uint8Array.of(2, 0))]]));
+    link.device.clearSlot = async (slot: number) => {
+      events.push(`clear-${slot}`);
+      throw new Error('Syntakt slot metadata changed before clear; clear was not opened');
+    };
+    const { parsed } = await createVerifiedSyntaktBackup([{ targetSlot: 1, intendedName: 'NEW', intendedPcm16le: Uint8Array.of(2, 0) }], [{ slot: 1, empty: true }]);
+    await expect(restoreSyntaktBackup(link, parsed, { onProgress: () => undefined })).rejects.toMatchObject({
+      results: [expect.objectContaining({ targetSlot: 1, state: 'pending' })],
+    });
   });
 });
