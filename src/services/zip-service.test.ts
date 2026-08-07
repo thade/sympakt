@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
-import { importSamplePack } from './zip-service.js';
+import { importSamplePack, normalizePCM } from './zip-service.js';
 import { BACKUP_MANIFEST_FILE, backupFromPcm, createVerifiedSyntaktBackup } from './syntakt-backup.js';
 
 function asFile(archive: Uint8Array): File {
@@ -31,6 +31,18 @@ describe('ordinary ZIP import', () => {
     if (markerHeader === undefined) throw new Error('Expected Backup ZIP marker header');
     corrupted[markerHeader] = 0;
     await expect(importSamplePack(asFile(corrupted))).rejects.toThrow('Invalid Syntakt backup ZIP');
+  });
+});
+
+describe('sample export normalization', () => {
+  it('normalizes finite samples when the buffer also contains NaN', () => {
+    const pcm = new Float32Array([0.5, Number.NaN, -0.25]);
+
+    normalizePCM(pcm);
+
+    expect(pcm[0]).toBe(1);
+    expect(pcm[1]).toBeNaN();
+    expect(pcm[2]).toBe(-0.5);
   });
 });
 

@@ -151,9 +151,12 @@ export async function prepareSampleExports(
   return prepared;
 }
 
-function normalizePCM(pcm: Float32Array): void {
+export function normalizePCM(pcm: Float32Array): void {
   let peak = 0;
-  for (const value of pcm) peak = Math.max(peak, Math.abs(value));
+  for (const value of pcm) {
+    const abs = Math.abs(value);
+    if (abs > peak) peak = abs;
+  }
   if (peak > 0 && peak < 1) {
     const gain = 1 / peak;
     for (let i = 0; i < pcm.length; i++) pcm[i] *= gain;
