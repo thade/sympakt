@@ -84,7 +84,13 @@ export class WebMidiTransport implements MidiTransport {
       if (output) {
         // This is passed through a <select>; JSON keeps the opaque Web MIDI
         // port IDs reversible without embedding a null character in HTML.
-        devices.push({ id: JSON.stringify([input.id, output.id]), input, output, inputName: input.name ?? 'MIDI input', outputName: output.name ?? 'MIDI output' });
+        devices.push({
+          id: JSON.stringify([input.id, output.id]),
+          input,
+          output,
+          inputName: input.name ?? 'MIDI input',
+          outputName: output.name ?? 'MIDI output',
+        });
       }
     }
     if (!devices.length) throw new MidiTransportError('No MIDI devices found. Connect the Syntakt over USB and switch it on.');

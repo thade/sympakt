@@ -55,7 +55,15 @@ export function parseSyntaktSampleSlotList(response: Uint8Array): SyntaktSampleS
       && operations === 0
       && hasData === 0
       && hasMetadata === 0;
-    if ((!name && !isCapturedEmptyRecord) || hasChildren !== 0 || type !== 2 || slot < 1 || slot > SYNTAKT_SAMPLE_SLOT_COUNT || hasData > 1 || hasMetadata > 1) {
+    if (
+      (!name && !isCapturedEmptyRecord)
+      || hasChildren !== 0
+      || type !== 2
+      || slot < 1
+      || slot > SYNTAKT_SAMPLE_SLOT_COUNT
+      || hasData > 1
+      || hasMetadata > 1
+    ) {
       throw new Error('Unexpected Syntakt sample-slot record');
     }
     if (slots.some((entry) => entry.slot === slot)) throw new Error('Duplicate Syntakt sample-slot record');

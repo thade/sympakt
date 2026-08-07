@@ -1,8 +1,22 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { theme, sharedStyles } from '../styles/theme.js';
-import { connectSyntakt, discoverSyntaktDevices, inspectSyntaktSlots, isSyntaktTransferSupported, isSyntaktTransferWriteEnabled, restoreSyntaktBackup, SyntaktBatchTransferError, uploadSympaktBank } from '../services/syntakt-transfer.js';
-import type { BankTransferProgress, BankTransferResult, ExplicitSlotMapping, SyntaktConnection } from '../services/syntakt-transfer.js';
+import {
+  connectSyntakt,
+  discoverSyntaktDevices,
+  inspectSyntaktSlots,
+  isSyntaktTransferSupported,
+  isSyntaktTransferWriteEnabled,
+  restoreSyntaktBackup,
+  SyntaktBatchTransferError,
+  uploadSympaktBank,
+} from '../services/syntakt-transfer.js';
+import type {
+  BankTransferProgress,
+  BankTransferResult,
+  ExplicitSlotMapping,
+  SyntaktConnection,
+} from '../services/syntakt-transfer.js';
 import type { WebMidiDevice } from '../midi/web-midi-transport.js';
 import type { SyntaktSampleSlot } from '../elektron/syntakt-slot-list.js';
 import type { Sample } from '../types/index.js';
@@ -18,43 +32,164 @@ export class SyntaktTransferDialog extends LitElement {
   static override styles = [theme, sharedStyles, css`
     :host { display: none; }
     :host([open]) { display: block; }
-    .overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, .78); display: grid; place-items: center; padding: 16px; }
-    .dialog { width: min(680px, 100%); max-height: min(760px, calc(100dvh - 32px)); overflow: hidden; border: 1px solid var(--border-color); background: var(--bg-secondary); box-shadow: 8px 8px 0 rgba(0,0,0,.35); display: flex; flex-direction: column; }
-    .head { padding: 20px 22px 14px; border-bottom: 1px solid var(--border-color); background: linear-gradient(110deg, var(--bg-secondary), #10231f); }
-    h2 { font-family: var(--font-pixel); color: var(--accent); font-size: 10px; letter-spacing: 2px; margin: 0 0 8px; text-transform: uppercase; }
-    .subhead { color: var(--text-muted); font-family: var(--font-pixel); font-size: 6px; line-height: 1.7; letter-spacing: 1px; text-transform: uppercase; }
+    .overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      background: rgba(0, 0, 0, .78);
+    }
+    .dialog {
+      display: flex;
+      flex-direction: column;
+      width: min(680px, 100%);
+      max-height: min(760px, calc(100dvh - 32px));
+      overflow: hidden;
+      border: 1px solid var(--border-color);
+      background: var(--bg-secondary);
+      box-shadow: 8px 8px 0 rgba(0,0,0,.35);
+    }
+    .head {
+      padding: 20px 22px 14px;
+      border-bottom: 1px solid var(--border-color);
+      background: linear-gradient(110deg, var(--bg-secondary), #10231f);
+    }
+    h2 {
+      margin: 0 0 8px;
+      color: var(--accent);
+      font-family: var(--font-pixel);
+      font-size: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+    .subhead {
+      color: var(--text-muted);
+      font-family: var(--font-pixel);
+      font-size: 6px;
+      line-height: 1.7;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
     .content { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 22px 18px; }
-    .notice { color: var(--warning); font-family: var(--font-pixel); font-size: 6px; letter-spacing: 1px; line-height: 1.75; border-left: 2px solid var(--warning); padding-left: 10px; margin: 14px 0; text-transform: uppercase; }
+    .notice {
+      margin: 14px 0;
+      border-left: 2px solid var(--warning);
+      padding-left: 10px;
+      color: var(--warning);
+      font-family: var(--font-pixel);
+      font-size: 6px;
+      letter-spacing: 1px;
+      line-height: 1.75;
+      text-transform: uppercase;
+    }
     .status { border: 1px solid var(--border-color); padding: 12px; background: var(--bg-primary); margin: 14px 0; }
     .status.connected { border-color: var(--accent); }
     .status.error { border-color: var(--danger); color: var(--danger); }
-    .label { display: block; color: var(--text-muted); font-family: var(--font-pixel); font-size: 6px; letter-spacing: 1px; margin-bottom: 6px; text-transform: uppercase; }
+    .label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--text-muted);
+      font-family: var(--font-pixel);
+      font-size: 6px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
     .device { font-family: var(--font-pixel); font-size: 8px; color: var(--accent); letter-spacing: 1px; }
     .detail { color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; margin-top: 6px; }
     .inventory { border: 1px solid var(--border-color); background: var(--bg-primary); }
-    .inventory-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; margin-top: 14px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; }
+    .inventory-summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 14px;
+      padding: 10px 12px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-primary);
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      font-size: 9px;
+    }
     .inventory-summary button { flex: 0 0 auto; padding: 5px 8px; font-size: 6px; }
     .inventory-summary > span:last-child { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-    .inventory-head, .slot { display: grid; grid-template-columns: 42px minmax(0, 1fr) 80px 48px; align-items: center; gap: 8px; }
-    .inventory-head { padding: 7px 10px; color: var(--text-muted); background: #101010; border-bottom: 1px solid var(--border-color); font-family: var(--font-pixel); font-size: 6px; letter-spacing: 1px; text-transform: uppercase; }
-    .slot { min-height: 29px; padding: 5px 10px; border-bottom: 1px solid rgba(255,255,255,.06); font-family: var(--font-mono); font-size: 10px; }
+    .inventory-head, .slot {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr) 80px 48px;
+      align-items: center;
+      gap: 8px;
+    }
+    .inventory-head {
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border-color);
+      background: #101010;
+      color: var(--text-muted);
+      font-family: var(--font-pixel);
+      font-size: 6px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .slot {
+      min-height: 29px;
+      padding: 5px 10px;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+      font-family: var(--font-mono);
+      font-size: 10px;
+    }
     .slot:last-child { border-bottom: 0; }
     .slot-number { color: var(--accent); font-family: var(--font-pixel); font-size: 7px; }
     .slot-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
     .slot-size { text-align: right; color: var(--text-secondary); font-size: 9px; }
-    .slot-state { color: var(--text-muted); font-family: var(--font-pixel); font-size: 6px; text-align: right; text-transform: uppercase; }
+    .slot-state {
+      color: var(--text-muted);
+      font-family: var(--font-pixel);
+      font-size: 6px;
+      text-align: right;
+      text-transform: uppercase;
+    }
     .slot-state[data-present='true'] { color: var(--accent-dim); }
     .button-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
     .write-panel { margin-top: 16px; border: 1px solid var(--warning); background: rgba(255, 136, 0, .05); padding: 12px; }
-    .write-title { color: var(--warning); font-family: var(--font-pixel); font-size: 7px; letter-spacing: 1px; text-transform: uppercase; }
+    .write-title {
+      color: var(--warning);
+      font-family: var(--font-pixel);
+      font-size: 7px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
     .device-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 14px 0; }
-    .device-picker select { min-width: 0; width: 100%; background: var(--bg-primary); border: 1px solid var(--border-color); color: var(--text-primary); padding: 8px; font-family: var(--font-mono); font-size: 10px; }
-    .confirmation { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; padding: 10px; border: 1px solid var(--warning-dim); color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; line-height: 1.45; }
+    .device-picker select {
+      min-width: 0;
+      width: 100%;
+      padding: 8px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      font-size: 10px;
+    }
+    .confirmation {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      margin-top: 12px;
+      padding: 10px;
+      border: 1px solid var(--warning-dim);
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      font-size: 9px;
+      line-height: 1.45;
+    }
     .confirmation input { width: auto; margin: 1px 0 0; accent-color: var(--warning); }
     .progress { margin-top: 12px; color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; }
     .bar { height: 6px; margin-top: 5px; border: 1px solid var(--border-color); background: var(--bg-primary); }
     .bar > div { height: 100%; background: var(--warning); transition: width .1s linear; }
-    @media (max-width: 520px) { .head, .content { padding-left: 14px; padding-right: 14px; } .inventory-head, .slot { grid-template-columns: 34px minmax(0, 1fr) 66px; } .slot-state, .inventory-head span:last-child { display: none; } }
+    @media (max-width: 520px) {
+      .head, .content { padding-left: 14px; padding-right: 14px; }
+      .inventory-head, .slot { grid-template-columns: 34px minmax(0, 1fr) 66px; }
+      .slot-state, .inventory-head span:last-child { display: none; }
+    }
   `];
 
   @property({ type: Boolean, reflect: true }) open = false;
@@ -83,29 +218,84 @@ export class SyntaktTransferDialog extends LitElement {
     if (!this.open) return nothing;
     const compatible = isSyntaktTransferSupported();
     return html`<div class="overlay" @click=${this.onOverlayClick}>
-      <section class="dialog" @click=${(event: Event) => event.stopPropagation()} aria-label="Syntakt sample library inspector">
+      <section
+        class="dialog"
+        @click=${(event: Event) => event.stopPropagation()}
+        aria-label="Syntakt sample library inspector"
+      >
         <div class="head">
           <h2>Syntakt / Sample Library</h2>
           <div class="subhead">USB MIDI connection</div>
         </div>
         <div class="content">
-          ${!compatible ? html`<div class="status error">This browser can't use Web MIDI here. Try Chrome or Firefox on an HTTPS or localhost page.</div>` : html`
+          ${!compatible ? html`
+            <div class="status error">
+              This browser can't use Web MIDI here. Try Chrome or Firefox on an HTTPS or localhost page.
+            </div>
+          ` : html`
             <div class="status ${this.connection ? 'connected' : ''} ${this.error ? 'error' : ''}">
               <span class="label">Device</span>
               ${this.connection
-                ? html`<div class="device">${this.connection.identity.name} · OS ${this.connection.identity.osVersion}</div><div class="detail">${this.error || `${this.slots.length} of 64 slots read`}</div>`
-                : html`<div class="detail">${this.error || 'Connect a Syntakt over USB MIDI. Close Elektron Transfer and Overbridge first.'}</div>`}
+                ? html`
+                  <div class="device">
+                    ${this.connection.identity.name} · OS ${this.connection.identity.osVersion}
+                  </div>
+                  <div class="detail">${this.error || `${this.slots.length} of 64 slots read`}</div>
+                `
+                : html`
+                  <div class="detail">
+                    ${this.error
+                      || 'Connect a Syntakt over USB MIDI. Close Elektron Transfer and Overbridge first.'}
+                  </div>
+                `}
             </div>
             ${!this.connection ? this.renderDevicePicker() : nothing}
             ${this.connection ? html`
-              <div class="inventory-summary"><span>${this.slots.length === 64 ? '64 slots read' : 'No slots read yet'}</span><span><button ?disabled=${!this.slots.length} @click=${this.toggleInventory}>${this.showInventory ? 'Hide slots' : 'Show 64 slots'}</button></span></div>
+              <div class="inventory-summary">
+                <span>${this.slots.length === 64 ? '64 slots read' : 'No slots read yet'}</span>
+                <span>
+                  <button ?disabled=${!this.slots.length} @click=${this.toggleInventory}>
+                    ${this.showInventory ? 'Hide slots' : 'Show 64 slots'}
+                  </button>
+                </span>
+              </div>
               ${this.showInventory ? this.renderInventory() : nothing}
-              ${this.transferResults.length ? html`<div class="status ${classifySyntaktTransferResults(this.transferResults).successful ? 'connected' : 'error'}"><span class="label">Last transfer</span><div class="detail">${this.transferResults.map(formatTransferResult).join(' · ')}</div></div>` : nothing}
+              ${this.transferResults.length ? html`
+                <div class="status ${
+                  classifySyntaktTransferResults(this.transferResults).successful ? 'connected' : 'error'
+                }">
+                  <span class="label">Last transfer</span>
+                  <div class="detail">
+                    ${this.transferResults.map(formatTransferResult).join(' · ')}
+                  </div>
+                </div>
+              ` : nothing}
               ${this.recoveryBackup ? this.renderRestorePanel() : nothing}
             ` : nothing}
             <div class="button-row">
-              ${this.isBusy() ? html`<button class="danger" @click=${this.cancelTransfer}>Cancel ${this.importingBank ? 'import' : 'transfer'}</button>` : html`${this.connection ? html`<button class="danger" @click=${this.disconnect}>Disconnect</button>` : nothing}<button @click=${this.close}>Close</button>`}
-              ${this.connection ? html`<button class="primary" ?disabled=${this.refreshing || this.isBusy()} @click=${this.refresh}>${this.refreshing ? 'Refreshing…' : 'Refresh slots'}</button>` : html`<button class="primary" ?disabled=${this.connecting || !this.devices.length} @click=${this.connect}>${this.connecting ? 'Connecting…' : 'Connect selected device'}</button>`}
+              ${this.isBusy() ? html`
+                <button class="danger" @click=${this.cancelTransfer}>
+                  Cancel ${this.importingBank ? 'import' : 'transfer'}
+                </button>
+              ` : html`
+                ${this.connection ? html`
+                  <button class="danger" @click=${this.disconnect}>Disconnect</button>
+                ` : nothing}
+                <button @click=${this.close}>Close</button>
+              `}
+              ${this.connection ? html`
+                <button
+                  class="primary"
+                  ?disabled=${this.refreshing || this.isBusy()}
+                  @click=${this.refresh}
+                >${this.refreshing ? 'Refreshing…' : 'Refresh slots'}</button>
+              ` : html`
+                <button
+                  class="primary"
+                  ?disabled=${this.connecting || !this.devices.length}
+                  @click=${this.connect}
+                >${this.connecting ? 'Connecting…' : 'Connect selected device'}</button>
+              `}
             </div>
           `}
         </div>
@@ -115,13 +305,17 @@ export class SyntaktTransferDialog extends LitElement {
 
   private renderInventory() {
     return html`<div class="inventory" aria-label="Syntakt sample slots">
-      <div class="inventory-head"><span>Slot</span><span>Name</span><span>Stored</span><span>Data</span></div>
+      <div class="inventory-head">
+        <span>Slot</span><span>Name</span><span>Stored</span><span>Data</span>
+      </div>
       ${this.slots.map((slot) => html`
         <div class="slot">
           <span class="slot-number">${String(slot.slot).padStart(2, '0')}</span>
           <span class="slot-name" title=${slot.name}>${slot.name}</span>
           <span class="slot-size">${formatBytes(slot.storedBytes)}</span>
-          <span class="slot-state" data-present=${slot.hasData}>${slot.hasData ? 'present' : (!slot.name && !slot.storedBytes ? 'empty' : 'unknown')}</span>
+          <span class="slot-state" data-present=${slot.hasData}>
+            ${slot.hasData ? 'present' : (!slot.name && !slot.storedBytes ? 'empty' : 'unknown')}
+          </span>
         </div>
       `)}
     </div>`;
@@ -161,11 +355,25 @@ export class SyntaktTransferDialog extends LitElement {
 
   private renderDevicePicker() {
     return html`<div class="device-picker">
-      <select aria-label="USB MIDI device" .value=${this.selectedDeviceId} ?disabled=${this.discoveringDevices || this.connecting || !this.devices.length} @change=${this.selectDevice}>
-        <option value="" ?selected=${!this.selectedDeviceId}>${this.devices.length ? 'Choose USB MIDI device…' : 'Find USB MIDI devices first'}</option>
-        ${this.devices.map((device) => html`<option value=${device.id} ?selected=${device.id === this.selectedDeviceId}>${device.inputName} ↔ ${device.outputName}</option>`)}
+      <select
+        aria-label="USB MIDI device"
+        .value=${this.selectedDeviceId}
+        ?disabled=${this.discoveringDevices || this.connecting || !this.devices.length}
+        @change=${this.selectDevice}
+      >
+        <option value="" ?selected=${!this.selectedDeviceId}>
+          ${this.devices.length ? 'Choose USB MIDI device…' : 'Find USB MIDI devices first'}
+        </option>
+        ${this.devices.map((device) => html`
+          <option value=${device.id} ?selected=${device.id === this.selectedDeviceId}>
+            ${device.inputName} ↔ ${device.outputName}
+          </option>
+        `)}
       </select>
-      <button ?disabled=${this.discoveringDevices || this.connecting} @click=${this.findDevices}>${this.discoveringDevices ? 'Finding…' : 'Refresh devices'}</button>
+      <button
+        ?disabled=${this.discoveringDevices || this.connecting}
+        @click=${this.findDevices}
+      >${this.discoveringDevices ? 'Finding…' : 'Refresh devices'}</button>
     </div>`;
   }
 
@@ -258,7 +466,12 @@ export class SyntaktTransferDialog extends LitElement {
   private async importAllSlots(): Promise<void> {
     if (!this.connection || this.isBusy() || this.slots.length !== 64) return;
     const currentSamples = this.sampleSlots.filter((sample) => sample !== null).length;
-    if (!confirm(`Import all 64 Syntakt slots? This replaces the ${currentSamples} sample${currentSamples === 1 ? '' : 's'} currently in Sympakt. Your Syntakt is not changed.`)) return;
+    const confirmed = confirm(
+      `Import all 64 Syntakt slots? This replaces the ${currentSamples} `
+      + `sample${currentSamples === 1 ? '' : 's'} currently in Sympakt. `
+      + 'Your Syntakt is not changed.',
+    );
+    if (!confirmed) return;
 
     this.importingBank = true;
     this.error = '';
@@ -289,15 +502,35 @@ export class SyntaktTransferDialog extends LitElement {
   }
 
   private renderRestorePanel() {
-    const slots = this.recoveryBackup?.manifest.entries.map((entry) => String(entry.targetSlot).padStart(2, '0')) || [];
+    const slots = this.recoveryBackup?.manifest.entries.map(
+      (entry) => String(entry.targetSlot).padStart(2, '0'),
+    ) || [];
     const slotList = slots.length <= 2
       ? slots.join(' and ')
       : `${slots.slice(0, -1).join(', ')}, and ${slots[slots.length - 1]}`;
     return html`<section class="write-panel" aria-label="Restore from Backup ZIP">
       <div class="write-title">Restore from Backup ZIP</div>
-      <div class="notice">Sympakt checks every slot before restoring. If any slot has changed, it stops before writing.</div>
-      <label class="confirmation"><input type="checkbox" .checked=${this.restoreAcknowledged} ?disabled=${this.isBusy()} @change=${(event: Event) => this.restoreAcknowledged = (event.target as HTMLInputElement).checked} /><span>I understand that slots ${slotList} may be replaced with their saved samples.</span></label>
-      <div class="button-row"><button class="danger" ?disabled=${!this.restoreAcknowledged || this.isBusy()} @click=${this.startRestore}>Restore backup exactly</button></div>
+      <div class="notice">
+        Sympakt checks every slot before restoring. If any slot has changed, it stops before writing.
+      </div>
+      <label class="confirmation">
+        <input
+          type="checkbox"
+          .checked=${this.restoreAcknowledged}
+          ?disabled=${this.isBusy()}
+          @change=${(event: Event) => {
+            this.restoreAcknowledged = (event.target as HTMLInputElement).checked;
+          }}
+        />
+        <span>I understand that slots ${slotList} may be replaced with their saved samples.</span>
+      </label>
+      <div class="button-row">
+        <button
+          class="danger"
+          ?disabled=${!this.restoreAcknowledged || this.isBusy()}
+          @click=${this.startRestore}
+        >Restore backup exactly</button>
+      </div>
     </section>`;
   }
 
@@ -314,7 +547,13 @@ export class SyntaktTransferDialog extends LitElement {
       }
       mappings.push({ sourceSlot, targetSlot: sourceSlot, expectedTarget });
     }
-    this.transferActive = true; this.error = ''; this.transferResults = []; this.recoveryBackup = null; this.restoreRevision = null; this.restoreAcknowledged = false; this.abortController = new AbortController();
+    this.transferActive = true;
+    this.error = '';
+    this.transferResults = [];
+    this.recoveryBackup = null;
+    this.restoreRevision = null;
+    this.restoreAcknowledged = false;
+    this.abortController = new AbortController();
     this.dispatchExportState(true);
     try {
       this.transferResults = await uploadSympaktBank(this.connection, this.sampleSlots, {
@@ -323,7 +562,9 @@ export class SyntaktTransferDialog extends LitElement {
         verifyReadback,
         signal: this.abortController.signal,
         onBackupReady: (archive) => {
-          downloadBlob(new Blob([archive.buffer as ArrayBuffer], { type: 'application/zip' }), `sympakt-syntakt-backup-${new Date().toISOString().replace(/[-:.TZ]/g, '')}.zip`);
+          const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '');
+          const blob = new Blob([archive.buffer as ArrayBuffer], { type: 'application/zip' });
+          downloadBlob(blob, `sympakt-syntakt-backup-${timestamp}.zip`);
         },
         onProgress: async (progress) => {
           this.dispatchExportState(true, progress);
@@ -345,8 +586,18 @@ export class SyntaktTransferDialog extends LitElement {
   }
 
   private async startRestore(): Promise<void> {
-    if (!this.connection || this.isBusy() || !this.restoreAcknowledged || !isSyntaktTransferWriteEnabled() || !this.recoveryBackup || this.restoreRevision !== this.bankRevision) return;
-    this.transferActive = true; this.error = ''; this.transferResults = []; this.abortController = new AbortController();
+    if (
+      !this.connection
+      || this.isBusy()
+      || !this.restoreAcknowledged
+      || !isSyntaktTransferWriteEnabled()
+      || !this.recoveryBackup
+      || this.restoreRevision !== this.bankRevision
+    ) return;
+    this.transferActive = true;
+    this.error = '';
+    this.transferResults = [];
+    this.abortController = new AbortController();
     try {
       this.transferResults = await restoreSyntaktBackup(this.connection, this.recoveryBackup, {
         signal: this.abortController.signal,
@@ -368,17 +619,28 @@ export class SyntaktTransferDialog extends LitElement {
   private isBusy(): boolean { return this.transferActive || this.importingBank; }
 
   private dispatchConnectionChange(connected: boolean): void {
-    this.dispatchEvent(new CustomEvent<{ connected: boolean; name?: string; importReady?: boolean }>('syntakt-connection-change', {
-      detail: connected && this.connection ? { connected: true, name: this.connection.identity.name, importReady: this.slots.length === 64 } : { connected: false, importReady: false },
-      bubbles: true,
-      composed: true,
-    }));
+    const detail = connected && this.connection
+      ? {
+          connected: true,
+          name: this.connection.identity.name,
+          importReady: this.slots.length === 64,
+        }
+      : { connected: false, importReady: false };
+    this.dispatchEvent(
+      new CustomEvent<{ connected: boolean; name?: string; importReady?: boolean }>(
+        'syntakt-connection-change',
+        { detail, bubbles: true, composed: true },
+      ),
+    );
   }
 
   private dispatchImportState(active: boolean, progress: SyntaktBankImportProgress | null = null): void {
-    this.dispatchEvent(new CustomEvent<{ active: boolean; progress: SyntaktBankImportProgress | null }>('syntakt-bank-import-state', {
-      detail: { active, progress }, bubbles: true, composed: true,
-    }));
+    this.dispatchEvent(
+      new CustomEvent<{ active: boolean; progress: SyntaktBankImportProgress | null }>(
+        'syntakt-bank-import-state',
+        { detail: { active, progress }, bubbles: true, composed: true },
+      ),
+    );
   }
 
   private dispatchExportState(active: boolean, progress: BankTransferProgress | null = null): void {
@@ -388,9 +650,12 @@ export class SyntaktTransferDialog extends LitElement {
   }
 
   private dispatchExportComplete(results: readonly BankTransferResult[], verifyReadback: boolean): void {
-    this.dispatchEvent(new CustomEvent<{ results: readonly BankTransferResult[]; verifyReadback: boolean }>('syntakt-bank-export-complete', {
-      detail: { results, verifyReadback }, bubbles: true, composed: true,
-    }));
+    this.dispatchEvent(
+      new CustomEvent<{ results: readonly BankTransferResult[]; verifyReadback: boolean }>(
+        'syntakt-bank-export-complete',
+        { detail: { results, verifyReadback }, bubbles: true, composed: true },
+      ),
+    );
   }
 
   private dispatchExportFailure(message: string, cancelled: boolean): void {
@@ -448,7 +713,9 @@ function preferredSyntaktDevice(devices: readonly WebMidiDevice[]): WebMidiDevic
 }
 
 function formatBytes(bytes: number): string {
-  return bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /** Let the parent export dialog paint each completed transfer before continuing. */
@@ -456,4 +723,8 @@ function nextPaint(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 }
 
-declare global { interface HTMLElementTagNameMap { 'sp-syntakt-transfer-dialog': SyntaktTransferDialog; } }
+declare global {
+  interface HTMLElementTagNameMap {
+    'sp-syntakt-transfer-dialog': SyntaktTransferDialog;
+  }
+}

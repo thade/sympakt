@@ -4,13 +4,23 @@ import { decodeElektronSysex, ELEKTRON_SYSEX_HEADER, encodeElektronSysex } from 
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
-export type ElektronRequest = (command: number, body?: Uint8Array<ArrayBufferLike>, options?: { timeoutMs?: number; signal?: AbortSignal }) => Promise<Uint8Array>;
+export type ElektronRequest = (
+  command: number,
+  body?: Uint8Array<ArrayBufferLike>,
+  options?: { timeoutMs?: number; signal?: AbortSignal },
+) => Promise<Uint8Array>;
 
 /** A serialized request broker. Responses must echo the request sequence and type. */
 export class ElektronSession {
   private sequence = 0;
   private tail: Promise<void> = Promise.resolve();
-  private pending: { sequence: number; type: number; resolve: (data: Uint8Array) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | null = null;
+  private pending: {
+    sequence: number;
+    type: number;
+    resolve: (data: Uint8Array) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
   private terminalError: Error | null = null;
   private closePromise: Promise<void> | null = null;
   private readonly terminalListeners = new Set<(error: Error) => void>();
@@ -22,7 +32,11 @@ export class ElektronSession {
     this.removeDisconnect = transport.onDisconnect((error) => this.fail(error));
   }
 
-  request(command: number, body: Uint8Array<ArrayBufferLike> = new Uint8Array(), options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<Uint8Array> {
+  request(
+    command: number,
+    body: Uint8Array<ArrayBufferLike> = new Uint8Array(),
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<Uint8Array> {
     if (this.terminalError) return Promise.reject(this.terminalError);
     const run = async (): Promise<Uint8Array> => this.execute(command, body, options);
     const result = this.tail.then(run, run);
@@ -39,7 +53,11 @@ export class ElektronSession {
     if (this.terminalError) return Promise.reject(this.terminalError);
     const run = async (): Promise<T> => {
       if (this.terminalError) throw this.terminalError;
-      const request: ElektronRequest = (command, body = new Uint8Array(), options = {}) => this.execute(command, body, options);
+      const request: ElektronRequest = (
+        command,
+        body = new Uint8Array(),
+        options = {},
+      ) => this.execute(command, body, options);
       return operation(request);
     };
     const result = this.tail.then(run, run);
@@ -75,7 +93,11 @@ export class ElektronSession {
     void this.closeTransport();
   }
 
-  private execute(command: number, body: Uint8Array<ArrayBufferLike>, options: { timeoutMs?: number; signal?: AbortSignal }): Promise<Uint8Array> {
+  private execute(
+    command: number,
+    body: Uint8Array<ArrayBufferLike>,
+    options: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<Uint8Array> {
     if (this.terminalError) return Promise.reject(this.terminalError);
     if (options.signal?.aborted) return Promise.reject(new DOMException('Transfer cancelled', 'AbortError'));
     const sequence = this.sequence++ & 0xffff;
@@ -85,12 +107,29 @@ export class ElektronSession {
     payload[4] = command;
     payload.set(body, 5);
     return new Promise<Uint8Array>((resolve, reject) => {
-      const timeout = setTimeout(() => this.fail(new MidiTransportError(`Syntakt did not answer command 0x${command.toString(16)}`)), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+      const timeout = setTimeout(
+        () => this.fail(new MidiTransportError(
+          `Syntakt did not answer command 0x${command.toString(16)}`,
+        )),
+        options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      );
       // At this point the command is about to be sent. An abort after send is
       // protocol-ambiguous, so permanently close rather than queue another one.
       const abort = () => this.fail(new DOMException('Transfer cancelled', 'AbortError'));
       options.signal?.addEventListener('abort', abort, { once: true });
-      this.pending = { sequence, type: command | 0x80, resolve: (value) => { options.signal?.removeEventListener('abort', abort); resolve(value); }, reject: (error) => { options.signal?.removeEventListener('abort', abort); reject(error); }, timer: timeout };
+      this.pending = {
+        sequence,
+        type: command | 0x80,
+        resolve: (value) => {
+          options.signal?.removeEventListener('abort', abort);
+          resolve(value);
+        },
+        reject: (error) => {
+          options.signal?.removeEventListener('abort', abort);
+          reject(error);
+        },
+        timer: timeout,
+      };
       try {
         this.transport.send(encodeElektronSysex(payload));
       } catch (error) {

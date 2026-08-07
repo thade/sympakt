@@ -67,7 +67,13 @@ export async function downloadSyntaktBank(
 
 /** Convert exact 48 kHz / 16-bit device PCM into a normal Sympakt bank sample. */
 export function createSampleFromSyntaktSlot(imported: ImportedSyntaktSlot, enablePitchDetection: boolean): Sample {
-  if (!Number.isInteger(imported.slot) || imported.slot < 1 || imported.slot > MAX_SLOTS || !imported.pcm16le.length || imported.pcm16le.length % 2) {
+  if (
+    !Number.isInteger(imported.slot)
+    || imported.slot < 1
+    || imported.slot > MAX_SLOTS
+    || !imported.pcm16le.length
+    || imported.pcm16le.length % 2
+  ) {
     throw new Error('Invalid Syntakt sample import');
   }
   const frames = imported.pcm16le.length / 2;
