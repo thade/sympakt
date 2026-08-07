@@ -122,29 +122,58 @@ export async function prepareSampleExports(
   const prepared: PreparedSampleExport[] = [];
   for (let i = 0; i < slots.length; i++) {
     const sample = slots[i];
-    if (!sample || (sample.splitEnabled && sample.aEmpty && !sample.splitSample)) continue;
+    if (!sample) continue;
+    // Skip dual slots that are entirely empty (A empty AND B missing).
+    if (sample.splitEnabled && sample.aEmpty && !sample.splitSample) continue;
+
+    const slotNumber = String(i + 1).padStart(2, '0');
     const speedFactor = getLofiSpeedFactor(sample.lofi);
     let pcm: Float32Array;
+
     if (sample.splitEnabled) {
+      // --- Dual split export ---
       pcm = await exportDualSplitPCM(sample, speedFactor);
     } else {
+      // --- Normal single sample export ---
       const exportBuffer = await resampleToExportFormat(sample.audioBuffer, speedFactor);
       pcm = getMonoPCM(exportBuffer);
+
       if (sample.loop) {
-        const loop = isLofiActive(sample.lofi)
-          ? { ...sample.loop, startTime: sample.loop.startTime / speedFactor, endTime: sample.loop.endTime / speedFactor, crossfadeDuration: sample.loop.crossfadeDuration / speedFactor }
+        const sf = speedFactor;
+        const loopForExport = isLofiActive(sample.lofi)
+          ? {
+              ...sample.loop,
+              startTime: sample.loop.startTime / sf,
+              endTime: sample.loop.endTime / sf,
+              crossfadeDuration: sample.loop.crossfadeDuration / sf,
+            }
           : sample.loop;
-        if (loop.crossfadeDuration > 0) pcm = applyCrossfade(pcm, loop, exportBuffer.sampleRate);
-        pcm = pcm.slice(Math.round(loop.startTime * exportBuffer.sampleRate), Math.min(Math.round(loop.endTime * exportBuffer.sampleRate), pcm.length));
+        if (loopForExport.crossfadeDuration > 0) {
+          pcm = applyCrossfade(pcm, loopForExport, exportBuffer.sampleRate);
+        }
+        const startSample = Math.round(loopForExport.startTime * exportBuffer.sampleRate);
+        const endSample = Math.round(loopForExport.endTime * exportBuffer.sampleRate);
+        pcm = pcm.slice(startSample, Math.min(endSample, pcm.length));
       } else {
-        pcm = pcm.slice(0, Math.round(MAX_SAMPLE_DURATION * exportBuffer.sampleRate));
+        const maxSamples = Math.round(MAX_SAMPLE_DURATION * exportBuffer.sampleRate);
+        if (pcm.length > maxSamples) {
+          pcm = pcm.slice(0, maxSamples);
+        }
       }
     }
+
+    // Normalize PCM to maximize volume without clipping
     if (normalizeOnExport) normalizePCM(pcm);
-    const slotNumber = String(i + 1).padStart(2, '0');
-    const filename = sample.splitEnabled
-      ? `${slotNumber}_${sample.aEmpty ? 'empty' : sanitizeFilename(sample.name)}-${sample.splitSample ? sanitizeFilename(sample.splitSample.name) : 'empty'}_DUAL.wav`
-      : `${slotNumber}_${sanitizeFilename(sample.name)}${sample.detectedNote ? `_${sample.detectedNote}` : ''}.wav`;
+
+    let filename: string;
+    if (sample.splitEnabled) {
+      const aName = sample.aEmpty ? 'empty' : sanitizeFilename(sample.name);
+      const bName = sample.splitSample ? sanitizeFilename(sample.splitSample.name) : 'empty';
+      filename = `${slotNumber}_${aName}-${bName}_DUAL.wav`;
+    } else {
+      const noteSuffix = sample.detectedNote ? `_${sample.detectedNote}` : '';
+      filename = `${slotNumber}_${sanitizeFilename(sample.name)}${noteSuffix}.wav`;
+    }
     const wavData = new Uint8Array(encodeWav(pcm));
     prepared.push({ slot: i + 1, filename, pcm16le: wavData.slice(44), wavData });
   }
@@ -528,8 +557,8 @@ export function downloadBlob(blob: Blob, filename: string): void {
   a.click();
   document.body.removeChild(a);
   // Browsers may resolve a clicked download asynchronously. Keep the URL alive
-  // long enough for that handoff; this function still throws synchronously if
-  // the download cannot be triggered, before a Syntakt writer is opened.
+  // long enough for pack, slice, and backup downloads to complete their handoff;
+  // this function still throws synchronously before a Syntakt writer is opened.
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
