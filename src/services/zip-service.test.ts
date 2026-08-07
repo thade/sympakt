@@ -20,6 +20,19 @@ describe('ordinary ZIP import', () => {
     expect(result.syntaktBackup).toBeUndefined();
   });
 
+  it('leaves ordinary ZIPs with non-UTF-8 filenames on the normal import path', async () => {
+    const archive = zipSync({ 'a.txt': strToU8('ordinary pack') });
+    const central = centralHeaderFor(archive, 'a.txt');
+    expect(central).toBeDefined();
+    if (central === undefined) throw new Error('Expected ordinary ZIP central header');
+    archive[30] = 0x82;
+    archive[central + 46] = 0x82;
+
+    const result = await importSamplePack(asFile(archive));
+
+    expect(result.syntaktBackup).toBeUndefined();
+  });
+
   it('does not let a malformed Backup ZIP fall through to ordinary import', async () => {
     const { archive } = await createVerifiedSyntaktBackup(
       [{ targetSlot: 1, intendedName: 'NEW', intendedPcm16le: Uint8Array.of(1, 0) }],

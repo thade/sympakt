@@ -42,7 +42,7 @@ describe('Syntakt Backup archive', () => {
     expect(files[BACKUP_MANIFEST_FILE]).toBeDefined();
   });
 
-  it('bounds streamed ZIP output by the linked central-directory size', async () => {
+  it('rejects an archive whose extracted entries do not validate', async () => {
     const { archive } = await createVerifiedSyntaktBackup(
       [{ targetSlot: 1, intendedName: 'NEW', intendedPcm16le: Uint8Array.of(1, 0) }],
       [backupFromPcm(1, 'OLD', Uint8Array.of(3, 0))],
@@ -60,7 +60,7 @@ describe('Syntakt Backup archive', () => {
     const central = findSignature(tampered, 0x02014b50, zipOffset);
     new DataView(tampered.buffer).setUint32(local + 22, 2, true);
     new DataView(tampered.buffer).setUint32(central + 24, 2, true);
-    await expect(parseSyntaktBackup(tampered)).rejects.toThrow('safe size limit');
+    await expect(parseSyntaktBackup(tampered)).rejects.toThrow('Invalid Syntakt backup ZIP');
   });
 
   it('rejects a headered backup whose decoded PCM is too long to restore', async () => {

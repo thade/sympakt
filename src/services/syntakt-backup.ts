@@ -1,4 +1,4 @@
-import { strFromU8, strToU8, zipSync } from 'fflate';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { SYNTAKT_MAX_SAMPLE_FRAMES } from '../elektron/syntakt-data-sample.js';
 import { extractPcm16leWav } from './wav-decoder.js';
 import { encodePcm16leWav } from './wav-encoder.js';
@@ -139,7 +139,18 @@ export async function tryParseSyntaktBackup(archive: Uint8Array): Promise<Parsed
   if (totalUncompressedBytes > MAX_ARCHIVE_BYTES || entries.some((entry) => !isSafeArchivePath(entry.path) || entry.uncompressedBytes > MAX_ENTRY_BYTES)) {
     throw new Error('Invalid Syntakt backup ZIP contents');
   }
-  const files = await inflateZipEntriesBounded(zipPayload, entries);
+  let files: Record<string, Uint8Array>;
+  try {
+    files = unzipSync(zipPayload);
+  } catch {
+    throw new Error('Invalid Syntakt backup ZIP');
+  }
+  for (const entry of entries) {
+    const data = files[entry.path];
+    if (!data || data.length !== entry.uncompressedBytes || zipCrc32(data) !== entry.crc32) {
+      throw new Error('Invalid Syntakt backup ZIP');
+    }
+  }
   const manifestBytes = files[BACKUP_MANIFEST_FILE];
   if (!manifestBytes || manifestBytes.length !== marker.uncompressedBytes || manifestBytes.length > MAX_MANIFEST_BYTES) throw new Error('Invalid Syntakt backup manifest');
   let raw: unknown;
@@ -234,7 +245,6 @@ interface ZipEntry {
   compressedBytes: number;
   uncompressedBytes: number;
   localOffset: number;
-  dataOffset: number;
 }
 
 /** Read a non-ZIP64 central directory without inflating file contents. */
@@ -270,21 +280,16 @@ function readZipEntries(archive: Uint8Array): ZipEntry[] {
     if (next > centralOffset + centralBytes || (flags & 0x0009) !== 0 || (compression !== 0 && compression !== 8) || compressedBytes === 0xffffffff || uncompressedBytes === 0xffffffff) throw new Error('Invalid Syntakt backup ZIP');
     let path: string;
     try { path = new TextDecoder('utf-8', { fatal: true }).decode(archive.subarray(offset + 46, offset + 46 + nameBytes)); } catch { throw new Error('Invalid Syntakt backup ZIP'); }
-    const dataOffset = assertCentralLocalLink(archive, centralOffset, { path, flags, compression, crc32, compressedBytes, uncompressedBytes, localOffset, dataOffset: 0 });
-    entries.push({ path, flags, compression, crc32, compressedBytes, uncompressedBytes, localOffset, dataOffset });
+    const entry = { path, flags, compression, crc32, compressedBytes, uncompressedBytes, localOffset };
+    assertCentralLocalLink(archive, centralOffset, entry);
+    entries.push(entry);
     offset = next;
   }
   if (offset !== centralOffset + centralBytes) throw new Error('Invalid Syntakt backup ZIP');
-  let localEnd = 0;
-  for (const entry of [...entries].sort((left, right) => left.localOffset - right.localOffset)) {
-    if (entry.localOffset !== localEnd) throw new Error('Invalid Syntakt backup ZIP');
-    localEnd = entry.dataOffset + entry.compressedBytes;
-  }
-  if (localEnd !== centralOffset) throw new Error('Invalid Syntakt backup ZIP');
   return entries;
 }
 
-function assertCentralLocalLink(archive: Uint8Array, centralOffset: number, entry: ZipEntry): number {
+function assertCentralLocalLink(archive: Uint8Array, centralOffset: number, entry: ZipEntry): void {
   if (entry.localOffset + 30 > centralOffset) throw new Error('Invalid Syntakt backup ZIP');
   const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
   if (view.getUint32(entry.localOffset, true) !== 0x04034b50 || view.getUint16(entry.localOffset + 6, true) !== entry.flags || view.getUint16(entry.localOffset + 8, true) !== entry.compression || view.getUint32(entry.localOffset + 14, true) !== entry.crc32 || view.getUint32(entry.localOffset + 18, true) !== entry.compressedBytes || view.getUint32(entry.localOffset + 22, true) !== entry.uncompressedBytes) throw new Error('Invalid Syntakt backup ZIP');
@@ -296,79 +301,6 @@ function assertCentralLocalLink(archive: Uint8Array, centralOffset: number, entr
   let localPath: string;
   try { localPath = new TextDecoder('utf-8', { fatal: true }).decode(archive.subarray(nameOffset, nameOffset + nameBytes)); } catch { throw new Error('Invalid Syntakt backup ZIP'); }
   if (localPath !== entry.path) throw new Error('Invalid Syntakt backup ZIP');
-  return dataOffset;
-}
-
-/** Inflate entries with the browser's incremental decompressor, rejecting each chunk before retaining it. */
-async function inflateZipEntriesBounded(archive: Uint8Array, entries: readonly ZipEntry[]): Promise<Record<string, Uint8Array>> {
-  const files: Record<string, Uint8Array> = {};
-  let totalBytes = 0;
-  try {
-    for (const entry of entries) {
-      const compressed = archive.subarray(entry.dataOffset, entry.dataOffset + entry.compressedBytes);
-      const chunks: Uint8Array[] = [];
-      let fileBytes = 0;
-      let crc = 0xffffffff;
-      const chunksToRead = entry.compression === 0 ? [compressed] : inflateDeflateRaw(compressed);
-      for await (const data of chunksToRead) {
-        const nextFileBytes = fileBytes + data.length;
-        const nextTotalBytes = totalBytes + data.length;
-        if (nextFileBytes > entry.uncompressedBytes || nextFileBytes > MAX_ENTRY_BYTES || nextTotalBytes > MAX_ARCHIVE_BYTES) {
-          throw new Error('Syntakt backup ZIP exceeds the safe size limit');
-        }
-        fileBytes = nextFileBytes;
-        totalBytes = nextTotalBytes;
-        crc = zipCrc32Update(crc, data);
-        chunks.push(data);
-      }
-      if (fileBytes !== entry.uncompressedBytes || ((crc ^ 0xffffffff) >>> 0) !== entry.crc32) throw new Error('Invalid Syntakt backup ZIP');
-      files[entry.path] = concatChunks(chunks, fileBytes);
-    }
-  } catch (error) {
-    throw backupZipError(error);
-  }
-  return files;
-}
-
-async function* inflateDeflateRaw(compressed: Uint8Array): AsyncGenerator<Uint8Array> {
-  if (typeof DecompressionStream === 'undefined') throw new Error('Syntakt backup ZIP requires browser decompression support');
-  let offset = 0;
-  const input = new ReadableStream<BufferSource>({
-    pull(controller) {
-      if (offset === compressed.length) { controller.close(); return; }
-      const end = Math.min(offset + 16 * 1024, compressed.length);
-      controller.enqueue(compressed.subarray(offset, end) as BufferSource);
-      offset = end;
-    },
-  });
-  let decompressor: DecompressionStream;
-  try { decompressor = new DecompressionStream('deflate-raw'); }
-  catch { throw new Error('Syntakt backup ZIP requires browser decompression support'); }
-  const reader = input.pipeThrough(decompressor).getReader();
-  let finished = false;
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) { finished = true; return; }
-      if (value) yield value;
-    }
-  } finally {
-    if (!finished) await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
-  }
-}
-
-function backupZipError(error: unknown): Error {
-  return error instanceof Error && (error.message === 'Syntakt backup ZIP exceeds the safe size limit' || error.message === 'Syntakt backup ZIP requires browser decompression support')
-    ? error
-    : new Error('Invalid Syntakt backup ZIP');
-}
-
-function concatChunks(chunks: readonly Uint8Array[], length: number): Uint8Array {
-  const joined = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.length; }
-  return joined;
 }
 
 function zipCrc32Update(crc: number, data: Uint8Array): number {
@@ -378,6 +310,10 @@ function zipCrc32Update(crc: number, data: Uint8Array): number {
     for (let bit = 0; bit < 8; bit += 1) next = (next & 1) ? (next >>> 1) ^ 0xedb88320 : next >>> 1;
   }
   return next >>> 0;
+}
+
+function zipCrc32(data: Uint8Array): number {
+  return (zipCrc32Update(0xffffffff, data) ^ 0xffffffff) >>> 0;
 }
 
 function findEndOfCentralDirectory(archive: Uint8Array): number {
