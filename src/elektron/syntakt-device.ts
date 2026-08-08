@@ -6,8 +6,7 @@ import type { SyntaktDataSampleRead } from './syntakt-data-sample.js';
 import { parseSyntaktSampleSlotList, SYNTAKT_SAMPLE_SLOT_COUNT } from './syntakt-slot-list.js';
 import type { SyntaktSampleSlot } from './syntakt-slot-list.js';
 
-// Confirmed by the OS 1.40 hardware transcript. The old value (13) was an
-// unverified assumption and must never be used to authorize device access.
+// Confirmed on hardware running OS 1.40 and 1.40A.
 export const SYNTAKT_DEVICE_ID = 0x1e;
 /** Firmware versions proven safe for identity, listing, and sample reads. */
 export const SYNTAKT_SUPPORTED_OS_VERSIONS = new Set(['1.40', '1.40A']);
@@ -94,7 +93,7 @@ function dataSampleDirectoryPath(): Uint8Array {
 }
 
 /**
- * Syntakt OS 1.40 data-sample client.
+ * Syntakt OS 1.40 and 1.40A data-sample client.
  *
  * The device exposes a slot-based global data-sample store, not a general
  * filesystem. `uploadSlot()` is deliberately narrow: it accepts only a

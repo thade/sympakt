@@ -13,14 +13,14 @@ export interface SyntaktSampleSlot {
 }
 
 /**
- * Parse the OS 1.40 `/samples/` list reply captured from a Syntakt.
+ * Parse the `/samples/` list reply used by Syntakt OS 1.40 and 1.40A.
  *
  * The returned records describe global sample-library slots. In particular,
  * they must not be interpreted as free-slot or project-usage information.
  */
 export function parseSyntaktSampleSlotList(response: Uint8Array): SyntaktSampleSlot[] {
   if (response.length < LIST_HEADER_BYTES || response[5] !== 1) throw new Error('Invalid Syntakt sample-slot list response');
-  // OS 1.40 response header: seven reserved zero bytes followed by the
+  // OS 1.40 and 1.40A response header: seven reserved zero bytes followed by the
   // captured global-data-sample listing marker (0x41), then the record count.
   if (response.slice(6, 13).some((value) => value !== 0) || response[13] !== 0x41) {
     const observed = [...response.slice(0, 24)].map((value) => value.toString(16).padStart(2, '0')).join(' ');
