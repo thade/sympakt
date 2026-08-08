@@ -278,6 +278,8 @@ export class AppShell extends LitElement {
   @state() private syntaktExportProgress: BankTransferProgress | null = null;
   @state() private syntaktExportResult = '';
   @state() private syntaktExportFailure = '';
+  /** True for any dialog-side transfer: export, restore, or bank import. */
+  @state() private syntaktBusy = false;
   private syntaktImportBankRevision: number | null = null;
   @state() private notification: { message: string; error: boolean } | null = null;
   @state() private exporting = false;
@@ -349,7 +351,9 @@ export class AppShell extends LitElement {
 
   override render() {
     const filledSlots = this.bankCtrl.slots.filter((s) => s !== null).length;
-    const syntaktImportDisabled = !this.syntaktImporting && !this.syntaktImportReady;
+    // While importing, the button is the Cancel control and must stay live.
+    const syntaktImportDisabled = !this.syntaktImporting
+      && (this.importing || this.syntaktBusy || !this.syntaktImportReady);
     const syntaktImportTitle = this.syntaktImporting
       ? 'Cancel the current Syntakt import'
       : this.syntaktImportReady
@@ -359,9 +363,10 @@ export class AppShell extends LitElement {
     const syntaktImportLabel = this.syntaktImporting
       ? `Cancel Syntakt import ${syntaktImportCount}/64`
       : 'Import Syntakt';
-    const syntaktExportDisabled = filledSlots === 0
+    const syntaktExportDisabled = this.importing
+      || filledSlots === 0
       || !this.syntaktImportReady
-      || this.syntaktExporting;
+      || this.syntaktBusy;
     const syntaktExportTitle = this.syntaktImportReady
       ? 'Back up and export the current bank to the connected Syntakt'
       : 'Connect a Syntakt before exporting';
@@ -512,6 +517,7 @@ export class AppShell extends LitElement {
         @syntakt-bank-import=${this.onSyntaktBankImport}
         @syntakt-bank-import-state=${this.onSyntaktBankImportState}
         @syntakt-bank-import-failure=${this.onSyntaktBankImportFailure}
+        @syntakt-busy-change=${this.onSyntaktBusyChange}
         @syntakt-bank-export-state=${this.onSyntaktBankExportState}
         @syntakt-bank-export-complete=${this.onSyntaktBankExportComplete}
         @syntakt-bank-export-failure=${this.onSyntaktBankExportFailure}
@@ -630,6 +636,9 @@ export class AppShell extends LitElement {
   }
 
   private async importZipFile(file: File): Promise<void> {
+    // Drag-and-drop and the default-pack loader bypass the disabled button, so
+    // overlapping imports have to be refused here too.
+    if (this.importing) return;
     // A ZIP import replaces the whole bank; during an active Syntakt transfer
     // that must be refused before the bank is touched, not after.
     if (this.syntaktTransferDialog?.isBusy()) {
@@ -639,6 +648,10 @@ export class AppShell extends LitElement {
     this.importing = true;
     try {
       const result = await importSamplePack(file, this.pitchDetectionEnabled);
+      if (this.syntaktTransferDialog?.isBusy()) {
+        this.showNotification('The Syntakt transfer started before the import finished. The bank was not changed.', true);
+        return;
+      }
       const backup = result.syntaktBackup;
       const slots = backup
         ? backup.manifest.entries.reduce<ReadonlyArray<Sample | null>>((bank, entry) => {
@@ -712,8 +725,12 @@ export class AppShell extends LitElement {
     void this.syntaktTransferDialog?.openAndDiscover();
   }
 
+  private onSyntaktBusyChange(event: CustomEvent<{ busy: boolean }>): void {
+    this.syntaktBusy = event.detail.busy;
+  }
+
   private onOpenSyntaktExport(): void {
-    if (!this.syntaktImportReady || this.syntaktExporting) return;
+    if (this.importing || !this.syntaktImportReady || this.syntaktBusy) return;
     this.mobileMenuOpen = false;
     this.syntaktExportProgress = null;
     this.syntaktExportResult = '';
@@ -744,11 +761,12 @@ export class AppShell extends LitElement {
   }
 
   private onSyntaktImportAction(): void {
+    if (this.importing) return;
     if (this.syntaktImporting) {
       this.syntaktTransferDialog?.cancelImport();
       return;
     }
-    if (!this.syntaktImportReady) return;
+    if (!this.syntaktImportReady || this.syntaktBusy) return;
     void this.syntaktTransferDialog?.importBank();
   }
 

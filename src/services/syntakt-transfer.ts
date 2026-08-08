@@ -392,7 +392,11 @@ function validateMappings(
 }
 function assertBackupTargetName(slot: number, name: string): void {
   try { assertRestorableSyntaktName(name); }
-  catch { throw new Error(`Syntakt slot ${slot} cannot be backed up: sample names must be 1–16 windows-1252 characters`); }
+  catch {
+    throw new Error(
+      `Syntakt slot ${slot} cannot be backed up: sample names must be 1–16 storable windows-1252 characters`,
+    );
+  }
 }
 function sameOriginal(
   current: Awaited<ReturnType<SyntaktDevice['downloadSlot']>>,

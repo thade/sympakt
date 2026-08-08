@@ -107,6 +107,17 @@ describe('Syntakt data-sample parser', () => {
     expect(parseSyntaktDataSample(new Uint8Array([...upload.content, ...upload.footer]))).toMatchObject({ slot: 1, name: 'TEST', frames: 2 });
   });
 
+  it('round-trips device names stored beyond ASCII', () => {
+    const upload = buildSyntaktDataSample(1, 'Böö', Uint8Array.of(0, 0));
+    const parsed = parseSyntaktDataSample(new Uint8Array([...upload.content, ...upload.footer]));
+
+    expect(parsed).toMatchObject({ slot: 1, name: 'Böö' });
+  });
+
+  it('rejects NUL because the device reader treats it as a name terminator', () => {
+    expect(() => buildSyntaktDataSample(1, 'A\0B', Uint8Array.of(0, 0))).toThrow('storable windows-1252');
+  });
+
   it('uses the captured Elektron CRC initial state', () => {
     expect(syntaktCrc32(new TextEncoder().encode('123456789'))).toBe(0xd202d277);
   });

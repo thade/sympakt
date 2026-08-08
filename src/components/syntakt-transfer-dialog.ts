@@ -320,6 +320,13 @@ export class SyntaktTransferDialog extends LitElement {
       this.restoreRevision = null;
       this.restoreAcknowledged = false;
     }
+    // Signalling from here covers every busy path — export, restore, and bank
+    // import — instead of relying on each one to announce itself.
+    if (changed.has('transferActive') || changed.has('importingBank')) {
+      this.dispatchEvent(new CustomEvent<{ busy: boolean }>('syntakt-busy-change', {
+        detail: { busy: this.isBusy() }, bubbles: true, composed: true,
+      }));
+    }
   }
 
   /** Arm an exact restore only for the bank atomically loaded from this ZIP. */

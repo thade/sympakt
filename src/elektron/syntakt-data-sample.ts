@@ -150,11 +150,21 @@ const WINDOWS_1252_BYTE_BY_CHAR: ReadonlyMap<string, number> = new Map(
 );
 
 export function encodeSyntaktSampleName(name: string): Uint8Array {
-  const bytes = [...name].map((char) => WINDOWS_1252_BYTE_BY_CHAR.get(char));
-  if (!name || bytes.length > MAX_NAME_BYTES || bytes.some((value) => value === undefined)) {
-    throw new Error('Syntakt sample names must be 1–16 windows-1252 characters');
+  const characters = [...name];
+  if (!characters.length || characters.length > MAX_NAME_BYTES) {
+    throw new Error('Syntakt sample names must be 1–16 storable windows-1252 characters');
   }
-  return Uint8Array.from(bytes as number[]);
+  const bytes = new Uint8Array(characters.length);
+  for (let index = 0; index < characters.length; index += 1) {
+    const byte = WINDOWS_1252_BYTE_BY_CHAR.get(characters[index]);
+    // Zero terminates device names when read back, so it cannot occur inside
+    // a name even though TextDecoder can represent the byte.
+    if (byte === undefined || byte === 0) {
+      throw new Error('Syntakt sample names must be 1–16 storable windows-1252 characters');
+    }
+    bytes[index] = byte;
+  }
+  return bytes;
 }
 
 /** Build the two captured OS 1.40 writer parts from canonical 16-bit LE PCM. */
