@@ -72,6 +72,51 @@ describe('sample export normalization', () => {
 });
 
 describe('shared sample rendering', () => {
+  it('renders a normal sample to fixed PCM bytes', async () => {
+    const [rendered] = await prepareSampleExports(
+      [sample('Kick', [0.25, -0.5, 0.75])],
+      false,
+    );
+
+    expect(rendered.filename).toBe('01_Kick.wav');
+    expect(rendered.pcm16le).toEqual(Uint8Array.of(
+      0xff, 0x1f,
+      0x00, 0xc0,
+      0xff, 0x5f,
+    ));
+  });
+
+  it('renders only the selected loop region to fixed PCM bytes', async () => {
+    const looped = sample('Loop', [0.1, 0.2, 0.3, 0.4]);
+    looped.loop = {
+      startTime: 1 / 48_000,
+      endTime: 3 / 48_000,
+      crossfadeDuration: 0,
+    };
+
+    const [rendered] = await prepareSampleExports([looped], false);
+
+    expect(rendered.filename).toBe('01_Loop.wav');
+    expect(rendered.pcm16le).toEqual(Uint8Array.of(
+      0x99, 0x19,
+      0x66, 0x26,
+    ));
+  });
+
+  it('renders fixed dual-sample placement and reversal', async () => {
+    const dual = sample('A', [0.2, 0.4]);
+    dual.splitEnabled = true;
+    dual.splitSample = splitSample('B', [-0.3, -0.6]);
+
+    const [rendered] = await prepareSampleExports([dual], false);
+    const expected = new Uint8Array(48_000 * 5 * 2);
+    expected.set([0x99, 0x19, 0x32, 0x33]);
+    expected.set([0x34, 0xb3, 0x9a, 0xd9], expected.length - 4);
+
+    expect(rendered.filename).toBe('01_A-B_DUAL.wav');
+    expect(rendered.pcm16le).toEqual(expected);
+  });
+
   it('uses the same filenames and WAV bytes for prepared and ZIP exports', async () => {
     const normal = sample('Kick', [0.25, -0.5, 0.75]);
     const looped = sample('Loop', [0.1, 0.2, 0.3, 0.4]);
