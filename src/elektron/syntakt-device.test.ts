@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { ElektronSession } from './elektron-session.js';
-import { decodeElektronSysex, encodeElektronSysex } from './sysex-codec.js';
-import { assertSupportedSyntaktIdentity, assertSyntaktWriteIdentity, SyntaktDevice } from './syntakt-device.js';
-import { syntaktCrc32 } from './syntakt-data-sample.js';
+import { decodeElektronSysex, encodeElektronSysex, readUint32BE } from './sysex-codec.js';
+import {
+  assertSupportedSyntaktIdentity,
+  assertSyntaktWriteIdentity,
+  SyntaktDevice,
+  SyntaktWriteStateUnknownError,
+} from './syntakt-device.js';
+import { buildSyntaktDataSample, syntaktCrc32, SYNTAKT_MAX_SAMPLE_FRAMES } from './syntakt-data-sample.js';
 import { SYNTAKT_OS_1_40_IDENTIFY_TRANSCRIPT } from './syntakt-transcripts.js';
 import type { MidiTransport } from '../midi/midi-transport.js';
 
@@ -167,6 +172,65 @@ async function waitForSent(transport: FakeTransport, count: number): Promise<voi
   expect(transport.sent).toHaveLength(count);
 }
 
+function uploadTarget() {
+  return { slot: 1, name: 'S1', storedBytes: 77_608, operations: 0x007e, hasData: true, hasMetadata: false };
+}
+
+function containerForPcm(pcm16le: Uint8Array): Uint8Array {
+  const upload = buildSyntaktDataSample(1, 'TEST', pcm16le);
+  return new Uint8Array([...upload.content, ...upload.footer]);
+}
+
+async function advanceUploadToWriter(
+  transport: FakeTransport,
+  upload: Promise<void>,
+): Promise<void> {
+  await waitForSent(transport, 1); transport.receive(identityResponse(0, 0x81));
+  await waitForSent(transport, 2); transport.receive(identityResponse(1, 0x82));
+  await waitForSent(transport, 3); transport.receive(slotListResponse(2));
+  const raw = capturedContainer();
+  await waitForSent(transport, 4); transport.receive(readerOpenResponse(3));
+  await waitForSent(transport, 5); transport.receive(initialReaderProbeResponse(4));
+  await waitForSent(transport, 6); transport.receive(readerBlockResponse(5, 1, true, raw));
+  await waitForSent(transport, 7); transport.receive(readerCloseResponse(6, raw.length));
+  await waitForSent(transport, 8); transport.receive(writerOpenResponse(7, 2));
+  void upload;
+}
+
+async function completeUpload(
+  transport: FakeTransport,
+  upload: Promise<void>,
+  pcm16le: Uint8Array,
+): Promise<number[]> {
+  await advanceUploadToWriter(transport, upload);
+  const built = buildSyntaktDataSample(1, 'NEW', pcm16le);
+  const expectedBlocks = [built.content, built.footer].flatMap((part) => {
+    const blocks: Uint8Array[] = [];
+    for (let offset = 0; offset < part.length; offset += 0x2000) blocks.push(part.slice(offset, offset + 0x2000));
+    return blocks;
+  });
+  const blockSizes: number[] = [];
+  let acknowledged = 0;
+  for (let blockSequence = 0; blockSequence < expectedBlocks.length; blockSequence += 1) {
+    const requestSequence = 8 + blockSequence;
+    await waitForSent(transport, 9 + blockSequence);
+    const request = decodeElektronSysex(transport.sent[8 + blockSequence])!;
+    const blockLength = readUint32BE(request, 17);
+    expect(request[4]).toBe(0x58);
+    expect(readUint32BE(request, 9)).toBe(blockSequence);
+    expect(blockLength).toBe(expectedBlocks[blockSequence].length);
+    expect(request.slice(21)).toEqual(expectedBlocks[blockSequence]);
+    blockSizes.push(blockLength);
+    acknowledged += blockLength;
+    transport.receive(writerBlockResponse(requestSequence, 2, blockSequence, acknowledged));
+  }
+  const closeSequence = 8 + expectedBlocks.length;
+  await waitForSent(transport, 9 + expectedBlocks.length);
+  transport.receive(writerCloseResponse(closeSequence, 2, acknowledged));
+  await upload;
+  return blockSizes;
+}
+
 describe('Syntakt OS 1.40 data-sample reader', () => {
   it('replays the captured open/read/close lifecycle and converts the completed container', async () => {
     const transport = new FakeTransport();
@@ -267,6 +331,52 @@ describe('Syntakt OS 1.40 data-sample reader', () => {
     await waitForSent(transport, 5); transport.receive(readerBlockResponse(4, 1, true, wrongSlot));
     await waitForSent(transport, 6); transport.receive(readerCloseResponse(5, wrongSlot.length));
     await expect(download).rejects.toThrow('requested slot 1');
+    await session.close();
+  });
+
+  it('reassembles a full reader block plus a one-byte final block', async () => {
+    const transport = new FakeTransport();
+    const session = new ElektronSession(transport);
+    const device = new SyntaktDevice(session);
+    const identify = device.identify();
+    await waitForSent(transport, 1); transport.receive(identityResponse(0, 0x81));
+    await waitForSent(transport, 2); transport.receive(identityResponse(1, 0x82));
+    await identify;
+
+    const pcm16le = new Uint8Array(8_086);
+    for (let index = 0; index < pcm16le.length; index += 1) pcm16le[index] = index & 0xff;
+    const raw = containerForPcm(pcm16le);
+    expect(raw).toHaveLength(8_193);
+    const download = device.downloadSlot(1);
+    await waitForSent(transport, 3); transport.receive(readerOpenResponse(2));
+    await waitForSent(transport, 4); transport.receive(initialReaderProbeResponse(3));
+    await waitForSent(transport, 5);
+    expect(readUint32BE(decodeElektronSysex(transport.sent[4])!, 9)).toBe(1);
+    transport.receive(readerBlockResponse(4, 1, false, raw.slice(0, 8_192)));
+    await waitForSent(transport, 6);
+    expect(readUint32BE(decodeElektronSysex(transport.sent[5])!, 9)).toBe(2);
+    transport.receive(readerBlockResponse(5, 2, true, raw.slice(8_192)));
+    await waitForSent(transport, 7); transport.receive(readerCloseResponse(6, raw.length));
+
+    await expect(download).resolves.toMatchObject({ slot: 1, name: 'TEST', pcm16le });
+    await session.close();
+  });
+
+  it('rejects an incorrect intermediate reader block sequence', async () => {
+    const transport = new FakeTransport();
+    const session = new ElektronSession(transport);
+    const device = new SyntaktDevice(session);
+    const identify = device.identify();
+    await waitForSent(transport, 1); transport.receive(identityResponse(0, 0x81));
+    await waitForSent(transport, 2); transport.receive(identityResponse(1, 0x82));
+    await identify;
+
+    const download = device.downloadSlot(1);
+    await waitForSent(transport, 3); transport.receive(readerOpenResponse(2));
+    await waitForSent(transport, 4); transport.receive(initialReaderProbeResponse(3));
+    await waitForSent(transport, 5); transport.receive(readerBlockResponse(4, 2, false, Uint8Array.of(1)));
+
+    await expect(download).rejects.toThrow('reader response did not match');
     await session.close();
   });
 
@@ -417,6 +527,84 @@ describe('Syntakt OS 1.40 data-sample reader', () => {
     transport.receive(writerCloseResponse(10, 2, 111));
     await expect(upload).resolves.toBeUndefined();
     expect(progress).toEqual([99, 111]);
+  });
+
+  it.each([
+    { label: '8,191-byte content', pcmBytes: 8_096, expectedBlocks: [8_191, 12] },
+    { label: '8,193-byte content', pcmBytes: 8_098, expectedBlocks: [8_192, 1, 12] },
+    {
+      label: 'maximum five-second sample',
+      pcmBytes: SYNTAKT_MAX_SAMPLE_FRAMES * 2,
+      expectedBlocks: [...new Array(58).fill(8_192), 4_959, 12],
+    },
+  ])('writes sequential blocks for $label', async ({ pcmBytes, expectedBlocks }) => {
+    const transport = new FakeTransport();
+    const session = new ElektronSession(transport);
+    const device = new SyntaktDevice(session);
+    const pcm16le = new Uint8Array(pcmBytes);
+    for (let index = 0; index < pcm16le.length; index += 1) pcm16le[index] = index & 0xff;
+    const progress: number[] = [];
+    const upload = device.uploadSlot(
+      1,
+      'NEW',
+      pcm16le,
+      uploadTarget(),
+      { name: 'TEST', pcm16le: Uint8Array.of(0x34, 0x12, 0xdc, 0xfe) },
+      ({ sentBytes }) => progress.push(sentBytes),
+    );
+
+    const blockSizes = await completeUpload(transport, upload, pcm16le);
+
+    expect(blockSizes).toEqual(expectedBlocks);
+    expect(progress).toHaveLength(expectedBlocks.length);
+    expect(progress.at(-1)).toBe(expectedBlocks.reduce((total, size) => total + size, 0));
+    await session.close();
+  });
+
+  it('closes the session when a writer acknowledgement has the wrong byte total', async () => {
+    const transport = new FakeTransport();
+    const session = new ElektronSession(transport);
+    const device = new SyntaktDevice(session);
+    const pcm16le = new Uint8Array(8_098);
+    const upload = device.uploadSlot(
+      1,
+      'NEW',
+      pcm16le,
+      uploadTarget(),
+      { name: 'TEST', pcm16le: Uint8Array.of(0x34, 0x12, 0xdc, 0xfe) },
+      () => undefined,
+    );
+    await advanceUploadToWriter(transport, upload);
+    await waitForSent(transport, 9);
+    transport.receive(writerBlockResponse(8, 2, 0, 8_191));
+
+    await expect(upload).rejects.toBeInstanceOf(SyntaktWriteStateUnknownError);
+    expect(transport.closed).toBe(true);
+  });
+
+  it('closes the session when cancellation arrives after the writer opens', async () => {
+    const transport = new FakeTransport();
+    const session = new ElektronSession(transport);
+    const device = new SyntaktDevice(session);
+    const controller = new AbortController();
+    const upload = device.uploadSlot(
+      1,
+      'NEW',
+      new Uint8Array(8_098),
+      uploadTarget(),
+      { name: 'TEST', pcm16le: Uint8Array.of(0x34, 0x12, 0xdc, 0xfe) },
+      () => undefined,
+      controller.signal,
+    );
+    await advanceUploadToWriter(transport, upload);
+    await waitForSent(transport, 9);
+    controller.abort();
+
+    await expect(upload).rejects.toMatchObject({
+      name: 'SyntaktWriteStateUnknownError',
+      cause: expect.objectContaining({ name: 'AbortError' }),
+    });
+    expect(transport.closed).toBe(true);
   });
 
   it('uses the captured clear command only after matching the exact target, then reads the empty sentinel', async () => {

@@ -2,15 +2,25 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formatSyntaktTransferCompletion, restoreSyntaktBackup, uploadPreparedSamples } from './syntakt-transfer.js';
 import { backupFromPcm, createVerifiedSyntaktBackup } from './syntakt-backup.js';
 import { SyntaktWriteStateUnknownError } from '../elektron/syntakt-device.js';
+import type { SyntaktDataSample, SyntaktDataSampleRead } from '../elektron/syntakt-data-sample.js';
 import type { PreparedSampleExport } from './zip-service.js';
 import type { SyntaktSampleSlot } from '../elektron/syntakt-slot-list.js';
 
 const record = (slot: number): SyntaktSampleSlot => ({ slot, name: `TARGET ${slot}`, storedBytes: 100, operations: 0x7e, hasData: true, hasMetadata: false });
-const sample = (slot: number, name: string, pcm16le: Uint8Array) => ({ slot, name, frames: pcm16le.length / 2, pcm16le, footerHash: 0 } as const);
+const sample = (slot: number, name: string, pcm16le: Uint8Array): SyntaktDataSample => ({
+  slot,
+  name,
+  frames: pcm16le.length / 2,
+  pcm16le,
+  footerHash: 0,
+});
 const prepared = (slot: number, filename: string, pcm16le: Uint8Array): PreparedSampleExport => ({ slot, filename, pcm16le, wavData: new Uint8Array(44 + pcm16le.length) });
 
 function enabled(): void { vi.stubGlobal('window', { isSecureContext: true }); vi.stubGlobal('navigator', { requestMIDIAccess: () => Promise.resolve(undefined) }); }
-function connection(events: string[], values = new Map<number, any>([[1, sample(1, 'TARGET 1', Uint8Array.of(1, 0))]])) {
+function connection(
+  events: string[],
+  values = new Map<number, SyntaktDataSampleRead>([[1, sample(1, 'TARGET 1', Uint8Array.of(1, 0))]]),
+) {
   const device = {
     downloadSlot: async (slot: number) => { events.push(`read-${slot}`); return values.get(slot)!; },
     listSampleSlots: async () => [...values.keys()].map(record),
@@ -85,6 +95,47 @@ describe('guarded Syntakt transfer', () => {
     await transfer;
   });
 
+  it('skips, restores, and clears the appropriate slots in one successful restore', async () => {
+    enabled();
+    const events: string[] = [];
+    const values = new Map<number, SyntaktDataSampleRead>([
+      [1, sample(1, 'OLD 1', Uint8Array.of(1, 0))],
+      [2, sample(2, 'NEW 2', Uint8Array.of(2, 0))],
+      [3, sample(3, 'NEW 3', Uint8Array.of(3, 0))],
+    ]);
+    const link = connection(events, values);
+    const { parsed } = await createVerifiedSyntaktBackup(
+      [
+        { targetSlot: 1, intendedName: 'NEW 1', intendedPcm16le: Uint8Array.of(11, 0) },
+        { targetSlot: 2, intendedName: 'NEW 2', intendedPcm16le: Uint8Array.of(2, 0) },
+        { targetSlot: 3, intendedName: 'NEW 3', intendedPcm16le: Uint8Array.of(3, 0) },
+      ],
+      [
+        backupFromPcm(1, 'OLD 1', Uint8Array.of(1, 0)),
+        backupFromPcm(2, 'OLD 2', Uint8Array.of(12, 0)),
+        { slot: 3, empty: true },
+      ],
+    );
+    const progress: Array<{ phase: string; completedFiles: number }> = [];
+
+    const results = await restoreSyntaktBackup(link, parsed, {
+      onProgress: ({ phase, completedFiles }) => progress.push({ phase, completedFiles }),
+    });
+
+    expect(events).toEqual(['read-1', 'read-2', 'read-3', 'write-2', 'read-2', 'clear-3']);
+    expect(results.map(({ targetSlot, state }) => ({ targetSlot, state }))).toEqual([
+      { targetSlot: 1, state: 'verified' },
+      { targetSlot: 2, state: 'verified' },
+      { targetSlot: 3, state: 'verified' },
+    ]);
+    expect(progress).toEqual([
+      { phase: 'write', completedFiles: 2 },
+      { phase: 'verify', completedFiles: 2 },
+      { phase: 'clear', completedFiles: 3 },
+    ]);
+    expect(link.session.close).not.toHaveBeenCalled();
+  });
+
   it('writes a verified empty backup target without an unnecessary clear', async () => {
     enabled(); const events: string[] = []; const link = connection(events, new Map([[1, { slot: 1, empty: true, footerHash: 0 }]]));
     await uploadPreparedSamples(link, [prepared(1, '01_NEW.wav', Uint8Array.of(2, 0))], { mappings: [{ sourceSlot: 1, targetSlot: 1, expectedTarget: record(1) }], onBackupReady: () => { events.push('download-zip'); }, onProgress: () => undefined });
@@ -103,6 +154,57 @@ describe('guarded Syntakt transfer', () => {
       mappings: [{ sourceSlot: 1, targetSlot: 1, expectedTarget: record(1) }], signal: signal.signal, onBackupReady: () => { cancelledEvents.push('download-zip'); }, onProgress: () => undefined,
     })).rejects.toThrow('cancelled');
     expect(cancelledEvents).toEqual([]);
+  });
+
+  it('skips readback when verification is disabled', async () => {
+    enabled(); const events: string[] = []; const link = connection(events);
+    const results = await uploadPreparedSamples(link, [prepared(1, '01_NEW.wav', Uint8Array.of(2, 0))], {
+      mappings: [{ sourceSlot: 1, targetSlot: 1, expectedTarget: record(1) }],
+      verifyReadback: false,
+      onBackupReady: () => undefined,
+      onProgress: () => undefined,
+    });
+    expect(events).toEqual(['read-1', 'write-1']);
+    expect(results).toEqual([expect.objectContaining({ targetSlot: 1, state: 'written' })]);
+  });
+
+  it('closes the session and reports a completed write when readback does not match', async () => {
+    enabled(); const events: string[] = []; const link = connection(events);
+    link.device.uploadSlot = async (slot: number) => { events.push(`write-${slot}`); };
+
+    await expect(uploadPreparedSamples(link, [prepared(1, '01_NEW.wav', Uint8Array.of(2, 0))], {
+      mappings: [{ sourceSlot: 1, targetSlot: 1, expectedTarget: record(1) }],
+      onBackupReady: () => undefined,
+      onProgress: () => undefined,
+    })).rejects.toMatchObject({
+      results: [expect.objectContaining({ targetSlot: 1, state: 'written' })],
+    });
+    expect(events).toEqual(['read-1', 'write-1', 'read-1']);
+    expect(link.session.close).toHaveBeenCalledOnce();
+  });
+
+  it('rejects invalid mappings and unsupported firmware before device I/O', async () => {
+    enabled();
+    const mappingEvents: string[] = [];
+    const mappingLink = connection(mappingEvents);
+    await expect(uploadPreparedSamples(mappingLink, [prepared(1, '01_NEW.wav', Uint8Array.of(2, 0))], {
+      mappings: [{ sourceSlot: 1, targetSlot: 2, expectedTarget: record(2) }],
+      onBackupReady: () => undefined,
+      onProgress: () => undefined,
+    })).rejects.toThrow('same-slot mapping');
+    expect(mappingEvents).toEqual([]);
+    expect(mappingLink.session.close).not.toHaveBeenCalled();
+
+    const firmwareEvents: string[] = [];
+    const firmwareLink = connection(firmwareEvents);
+    firmwareLink.identity.osVersion = '1.41';
+    await expect(uploadPreparedSamples(firmwareLink, [prepared(1, '01_NEW.wav', Uint8Array.of(2, 0))], {
+      mappings: [{ sourceSlot: 1, targetSlot: 1, expectedTarget: record(1) }],
+      onBackupReady: () => undefined,
+      onProgress: () => undefined,
+    })).rejects.toThrow('read-only');
+    expect(firmwareEvents).toEqual([]);
+    expect(firmwareLink.session.close).not.toHaveBeenCalled();
   });
 
   it('backs up device names that windows-1252 stores beyond ASCII', async () => {
