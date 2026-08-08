@@ -15,7 +15,7 @@ export interface SyntaktConnection {
 }
 export interface ExplicitSlotMapping { sourceSlot: number; targetSlot: number; expectedTarget: SyntaktSampleSlot; }
 export interface BankTransferProgress {
-  phase: 'backup' | 'clear' | 'write' | 'verify';
+  phase: 'backup' | 'preflight' | 'clear' | 'write' | 'verify';
   fileIndex: number;
   fileCount: number;
   completedFiles: number;
@@ -44,6 +44,7 @@ export function formatSyntaktTransferCompletion(progress: Pick<BankTransferProgr
 export function formatSyntaktTransferPhase(progress: Pick<BankTransferProgress, 'phase'>): string {
   const labels: Record<BankTransferProgress['phase'], string> = {
     backup: 'Backing up',
+    preflight: 'Checking backup',
     clear: 'Clearing',
     write: 'Writing',
     verify: 'Checking',
@@ -212,7 +213,7 @@ export async function restoreSyntaktBackup(
   for (const entry of entries) {
     if (!('empty' in entry.original)) buildSyntaktDataSample(entry.targetSlot, entry.original.name, entry.original.pcm16le);
   }
-  const totalBytes = entries.reduce(
+  const potentialRestoreBytes = entries.reduce(
     (sum, entry) => sum + (
       'empty' in entry.original
         ? 0
@@ -235,20 +236,43 @@ export async function restoreSyntaktBackup(
       const expected = inventory.find((slot) => slot.slot === entry.targetSlot);
       if (!expected) throw new Error(`Syntakt slot ${entry.targetSlot} is no longer present`);
       const current = await connection.device.downloadSlot(entry.targetSlot, options.signal);
-      if (sameOriginal(current, entry.original)) { results[index].state = 'verified'; continue; }
-      if (
-        current.empty
-        || current.name !== entry.intendedName
-        || await sha256Hex(current.pcm16le) !== entry.intendedPcmSha256
-      ) {
-        throw new Error(
-          `Syntakt slot ${entry.targetSlot} no longer matches its recorded original or intended upload`,
-        );
+      if (sameOriginal(current, entry.original)) results[index].state = 'verified';
+      else {
+        if (
+          current.empty
+          || current.name !== entry.intendedName
+          || await sha256Hex(current.pcm16le) !== entry.intendedPcmSha256
+        ) {
+          throw new Error(
+            `Syntakt slot ${entry.targetSlot} no longer matches its recorded original or intended upload`,
+          );
+        }
+        candidates.push({ index, entry, expected });
       }
-      candidates.push({ index, entry, expected });
+      options.onProgress({
+        phase: 'preflight',
+        fileIndex: index,
+        fileCount: entries.length,
+        completedFiles: index + 1,
+        totalFiles: entries.length,
+        filename: 'empty' in entry.original ? 'empty' : entry.original.name,
+        fileSentBytes: 0,
+        fileTotalBytes: 0,
+        totalSentBytes: 0,
+        totalBytes: potentialRestoreBytes,
+      });
     }
+    const totalBytes = candidates.reduce(
+      (sum, { entry }) => sum + (
+        'empty' in entry.original
+          ? 0
+          : entry.original.pcm16le.length + SYNTAKT_DATA_SAMPLE_CONTAINER_OVERHEAD_BYTES
+      ),
+      0,
+    );
     let totalSentBytes = 0;
-    for (const { index, entry, expected } of candidates) {
+    for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
+      const { index, entry, expected } = candidates[candidateIndex];
       throwIfAborted(options.signal);
       if ('empty' in entry.original) {
         try {
@@ -265,10 +289,10 @@ export async function restoreSyntaktBackup(
         results[index].state = 'verified';
         options.onProgress({
           phase: 'clear',
-          fileIndex: index,
-          fileCount: entries.length,
-          completedFiles: index + 1,
-          totalFiles: entries.length,
+          fileIndex: candidateIndex,
+          fileCount: candidates.length,
+          completedFiles: candidateIndex + 1,
+          totalFiles: candidates.length,
           filename: 'empty',
           fileSentBytes: 0,
           fileTotalBytes: 0,
@@ -288,10 +312,10 @@ export async function restoreSyntaktBackup(
         ({ sentBytes, totalBytes: fileTotalBytes }) => {
           options.onProgress({
             phase: 'write',
-            fileIndex: index,
-            fileCount: entries.length,
-            completedFiles: sentBytes < fileTotalBytes ? index : index + 1,
-            totalFiles: entries.length,
+            fileIndex: candidateIndex,
+            fileCount: candidates.length,
+            completedFiles: sentBytes < fileTotalBytes ? candidateIndex : candidateIndex + 1,
+            totalFiles: candidates.length,
             filename: original.name,
             fileSentBytes: sentBytes,
             fileTotalBytes,
@@ -308,10 +332,10 @@ export async function restoreSyntaktBackup(
       const fileBytes = original.pcm16le.length + SYNTAKT_DATA_SAMPLE_CONTAINER_OVERHEAD_BYTES;
       options.onProgress({
         phase: 'verify',
-        fileIndex: index,
-        fileCount: entries.length,
-        completedFiles: index + 1,
-        totalFiles: entries.length,
+        fileIndex: candidateIndex,
+        fileCount: candidates.length,
+        completedFiles: candidateIndex + 1,
+        totalFiles: candidates.length,
         filename: original.name,
         fileSentBytes: fileBytes,
         fileTotalBytes: fileBytes,

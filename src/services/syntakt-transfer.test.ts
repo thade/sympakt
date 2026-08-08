@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { formatSyntaktTransferCompletion, restoreSyntaktBackup, uploadPreparedSamples } from './syntakt-transfer.js';
+import {
+  formatSyntaktTransferCompletion,
+  formatSyntaktTransferPhase,
+  restoreSyntaktBackup,
+  uploadPreparedSamples,
+} from './syntakt-transfer.js';
 import { backupFromPcm, createVerifiedSyntaktBackup } from './syntakt-backup.js';
 import { SyntaktWriteStateUnknownError } from '../elektron/syntakt-device.js';
 import type { SyntaktDataSample, SyntaktDataSampleRead } from '../elektron/syntakt-data-sample.js';
@@ -36,6 +41,7 @@ describe('guarded Syntakt transfer', () => {
   it('formats only canonical completed-transfer counts for every export surface', () => {
     expect(formatSyntaktTransferCompletion({ completedFiles: 0, totalFiles: 64 })).toBe('0/64');
     expect(formatSyntaktTransferCompletion({ completedFiles: 1, totalFiles: 64 })).toBe('1/64');
+    expect(formatSyntaktTransferPhase({ phase: 'preflight' })).toBe('Checking backup');
   });
 
   it('downloads the verified ZIP before opening a writer', async () => {
@@ -116,10 +122,10 @@ describe('guarded Syntakt transfer', () => {
         { slot: 3, empty: true },
       ],
     );
-    const progress: Array<{ phase: string; completedFiles: number }> = [];
+    const progress: Array<{ phase: string; completedFiles: number; totalFiles: number }> = [];
 
     const results = await restoreSyntaktBackup(link, parsed, {
-      onProgress: ({ phase, completedFiles }) => progress.push({ phase, completedFiles }),
+      onProgress: ({ phase, completedFiles, totalFiles }) => progress.push({ phase, completedFiles, totalFiles }),
     });
 
     expect(events).toEqual(['read-1', 'read-2', 'read-3', 'write-2', 'read-2', 'clear-3']);
@@ -129,9 +135,12 @@ describe('guarded Syntakt transfer', () => {
       { targetSlot: 3, state: 'verified' },
     ]);
     expect(progress).toEqual([
-      { phase: 'write', completedFiles: 2 },
-      { phase: 'verify', completedFiles: 2 },
-      { phase: 'clear', completedFiles: 3 },
+      { phase: 'preflight', completedFiles: 1, totalFiles: 3 },
+      { phase: 'preflight', completedFiles: 2, totalFiles: 3 },
+      { phase: 'preflight', completedFiles: 3, totalFiles: 3 },
+      { phase: 'write', completedFiles: 1, totalFiles: 2 },
+      { phase: 'verify', completedFiles: 1, totalFiles: 2 },
+      { phase: 'clear', completedFiles: 2, totalFiles: 2 },
     ]);
     expect(link.session.close).not.toHaveBeenCalled();
   });

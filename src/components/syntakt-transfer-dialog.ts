@@ -8,6 +8,8 @@ import {
   inspectSyntaktSlots,
   isSyntaktTransferSupported,
   isSyntaktTransferWriteEnabled,
+  formatSyntaktTransferCompletion,
+  formatSyntaktTransferPhase,
   restoreSyntaktBackup,
   SyntaktBatchTransferError,
   uploadPreparedSamples,
@@ -173,8 +175,17 @@ export class SyntaktTransferDialog extends LitElement {
     }
     .confirmation input { width: auto; margin: 1px 0 0; accent-color: var(--warning); }
     .progress { margin-top: 12px; color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; }
-    .bar { height: 6px; margin-top: 5px; border: 1px solid var(--border-color); background: var(--bg-primary); }
-    .bar > div { height: 100%; background: var(--warning); transition: width .1s linear; }
+    .bar {
+      display: grid;
+      gap: 1px;
+      height: 6px;
+      margin-top: 5px;
+      overflow: hidden;
+      border: 1px solid var(--border-color);
+      background: #000;
+    }
+    .segment { min-width: 0; background: var(--bg-secondary); }
+    .segment.complete { background: var(--warning); }
     @media (max-width: 520px) {
       .head, .content { padding-left: 14px; padding-right: 14px; }
       .inventory-head, .slot { grid-template-columns: 34px minmax(0, 1fr) 66px; }
@@ -198,6 +209,7 @@ export class SyntaktTransferDialog extends LitElement {
   @state() private importingBank = false;
   @state() private transferResults: readonly BankTransferResult[] = [];
   @state() private recoveryBackup: ParsedSyntaktBackup | null = null;
+  @state() private restoreProgress: BankTransferProgress | null = null;
   private restoreRevision: number | null = null;
   @state() private restoreAcknowledged = false;
   @state() private error = '';
@@ -260,7 +272,7 @@ export class SyntaktTransferDialog extends LitElement {
                   </div>
                 </div>
               ` : nothing}
-              ${this.recoveryBackup ? this.renderRestorePanel() : nothing}
+              ${this.recoveryBackup || this.restoreProgress ? this.renderRestorePanel() : nothing}
             ` : nothing}
             <div class="button-row">
               ${this.isBusy() ? html`
@@ -335,6 +347,7 @@ export class SyntaktTransferDialog extends LitElement {
     this.recoveryBackup = backup;
     this.restoreRevision = bankRevision;
     this.restoreAcknowledged = false;
+    this.restoreProgress = null;
     this.error = '';
   }
 
@@ -342,6 +355,7 @@ export class SyntaktTransferDialog extends LitElement {
     this.recoveryBackup = null;
     this.restoreRevision = null;
     this.restoreAcknowledged = false;
+    this.restoreProgress = null;
   }
 
   /** Start discovery from the toolbar click, preserving the browser gesture. */
@@ -413,7 +427,7 @@ export class SyntaktTransferDialog extends LitElement {
       await this.invalidateConnection(error instanceof Error ? error.message : 'Could not connect to Syntakt');
     } finally {
       this.connecting = false;
-      if (connected) this.close();
+      if (connected && !this.recoveryBackup) this.close();
     }
   }
 
@@ -505,29 +519,49 @@ export class SyntaktTransferDialog extends LitElement {
     const slotList = slots.length <= 2
       ? slots.join(' and ')
       : `${slots.slice(0, -1).join(', ')}, and ${slots[slots.length - 1]}`;
+    const progress = this.restoreProgress;
     return html`<section class="write-panel" aria-label="Restore from Backup ZIP">
       <div class="write-title">Restore from Backup ZIP</div>
-      <div class="notice">
-        Sympakt checks every slot before restoring. If any slot has changed, it stops before writing.
-      </div>
-      <label class="confirmation">
-        <input
-          type="checkbox"
-          .checked=${this.restoreAcknowledged}
-          ?disabled=${this.isBusy()}
-          @change=${(event: Event) => {
-            this.restoreAcknowledged = (event.target as HTMLInputElement).checked;
-          }}
-        />
-        <span>I understand that slots ${slotList} may be replaced with their saved samples.</span>
-      </label>
-      <div class="button-row">
-        <button
-          class="danger"
-          ?disabled=${!this.restoreAcknowledged || this.isBusy()}
-          @click=${this.startRestore}
-        >Restore backup exactly</button>
-      </div>
+      ${progress ? html`
+        <div class="progress">
+          ${formatSyntaktTransferPhase(progress)} · ${formatSyntaktTransferCompletion(progress)} complete
+          <div
+            class="bar"
+            role="progressbar"
+            aria-label="Completed Syntakt restore transfers"
+            aria-valuemin="0"
+            aria-valuemax=${progress.totalFiles}
+            aria-valuenow=${progress.completedFiles}
+            style=${`grid-template-columns: repeat(${progress.totalFiles || 1}, minmax(0, 1fr))`}
+          >
+            ${Array.from({ length: progress.totalFiles }, (_, index) => html`
+              <span class=${index < progress.completedFiles ? 'segment complete' : 'segment'}></span>
+            `)}
+          </div>
+        </div>
+      ` : html`
+        <div class="notice">
+          Sympakt checks every slot before restoring. If any slot has changed, it stops before writing.
+        </div>
+        <label class="confirmation">
+          <input
+            type="checkbox"
+            .checked=${this.restoreAcknowledged}
+            ?disabled=${this.isBusy()}
+            @change=${(event: Event) => {
+              this.restoreAcknowledged = (event.target as HTMLInputElement).checked;
+            }}
+          />
+          <span>I understand that slots ${slotList} may be replaced with their saved samples.</span>
+        </label>
+        <div class="button-row">
+          <button
+            class="danger"
+            ?disabled=${!this.restoreAcknowledged || this.isBusy()}
+            @click=${this.startRestore}
+          >Restore backup exactly</button>
+        </div>
+      `}
     </section>`;
   }
 
@@ -605,11 +639,24 @@ export class SyntaktTransferDialog extends LitElement {
     this.transferActive = true;
     this.error = '';
     this.transferResults = [];
+    const totalFiles = this.recoveryBackup.manifest.entries.length;
+    this.restoreProgress = {
+      phase: 'preflight',
+      fileIndex: 0,
+      fileCount: totalFiles,
+      completedFiles: 0,
+      totalFiles,
+      filename: '',
+      fileSentBytes: 0,
+      fileTotalBytes: 0,
+      totalSentBytes: 0,
+      totalBytes: 0,
+    };
     this.abortController = new AbortController();
     try {
       this.transferResults = await restoreSyntaktBackup(this.connection, this.recoveryBackup, {
         signal: this.abortController.signal,
-        onProgress: () => undefined,
+        onProgress: (progress) => { this.restoreProgress = progress; },
       });
       this.recoveryBackup = null;
       this.restoreRevision = null;
@@ -619,7 +666,11 @@ export class SyntaktTransferDialog extends LitElement {
       const message = error instanceof Error ? error.message : 'Syntakt backup restoration failed';
       if (error instanceof SyntaktBatchTransferError) this.transferResults = error.results;
       await this.invalidateConnection(message);
-    } finally { this.transferActive = false; this.abortController = null; }
+    } finally {
+      this.transferActive = false;
+      this.restoreProgress = null;
+      this.abortController = null;
+    }
   }
 
   private cancelTransfer(): void { this.abortController?.abort(); }
@@ -679,6 +730,7 @@ export class SyntaktTransferDialog extends LitElement {
     this.connection = null;
     this.slots = [];
     this.showInventory = false;
+    this.restoreProgress = null;
     this.error = error;
     this.dispatchConnectionChange(false);
     if (closeSession) await connection?.session.close().catch(() => undefined);
