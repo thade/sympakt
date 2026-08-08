@@ -1,6 +1,7 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { theme, sharedStyles } from '../styles/theme.js';
+import { modalOverlayStyles } from './modal-styles.js';
 import {
   connectSyntakt,
   discoverSyntaktDevices,
@@ -9,7 +10,7 @@ import {
   isSyntaktTransferWriteEnabled,
   restoreSyntaktBackup,
   SyntaktBatchTransferError,
-  uploadSympaktBank,
+  uploadPreparedSamples,
 } from '../services/syntakt-transfer.js';
 import type {
   BankTransferProgress,
@@ -21,7 +22,7 @@ import type { WebMidiDevice } from '../midi/web-midi-transport.js';
 import type { SyntaktSampleSlot } from '../elektron/syntakt-slot-list.js';
 import type { Sample } from '../types/index.js';
 import type { ParsedSyntaktBackup } from '../services/syntakt-backup.js';
-import { downloadBlob } from '../services/zip-service.js';
+import { downloadBlob, prepareSampleExports } from '../services/zip-service.js';
 import { classifySyntaktTransferResults } from '../services/syntakt-transfer-results.js';
 import { downloadSyntaktBank } from '../services/syntakt-import.js';
 import type { ImportedSyntaktSlot, SyntaktBankImportProgress } from '../services/syntakt-import.js';
@@ -29,18 +30,7 @@ import type { ImportedSyntaktSlot, SyntaktBankImportProgress } from '../services
 /** A global-library inspector with a guarded same-slot sample-bank writer. */
 @customElement('sp-syntakt-transfer-dialog')
 export class SyntaktTransferDialog extends LitElement {
-  static override styles = [theme, sharedStyles, css`
-    :host { display: none; }
-    :host([open]) { display: block; }
-    .overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 1000;
-      display: grid;
-      place-items: center;
-      padding: 16px;
-      background: rgba(0, 0, 0, .78);
-    }
+  static override styles = [theme, sharedStyles, modalOverlayStyles, css`
     .dialog {
       display: flex;
       flex-direction: column;
@@ -383,11 +373,11 @@ export class SyntaktTransferDialog extends LitElement {
     this.error = '';
     try {
       this.devices = await discoverSyntaktDevices();
-      const preferred = preferredSyntaktDevice(this.devices);
-        this.selectedDeviceId = preferred?.id
-          ?? (this.devices.some((device) => device.id === this.selectedDeviceId)
-            ? this.selectedDeviceId
-          : this.devices[0]?.id ?? '');
+      // A still-valid explicit selection survives a refresh; only a missing or
+      // empty selection falls back to the preferred Syntakt pair.
+      if (!this.devices.some((device) => device.id === this.selectedDeviceId)) {
+        this.selectedDeviceId = preferredSyntaktDevice(this.devices)?.id ?? this.devices[0]?.id ?? '';
+      }
     } catch (error) {
       this.devices = [];
       this.selectedDeviceId = '';
@@ -489,7 +479,7 @@ export class SyntaktTransferDialog extends LitElement {
       }));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Syntakt import failed';
-      const cancelled = error instanceof DOMException && error.name === 'AbortError';
+      const cancelled = isCancellation(error);
       this.dispatchEvent(new CustomEvent<{ message: string; cancelled: boolean }>('syntakt-bank-import-failure', {
         detail: { message, cancelled }, bubbles: true, composed: true,
       }));
@@ -536,17 +526,6 @@ export class SyntaktTransferDialog extends LitElement {
 
   private async runTransfer(verifyReadback: boolean): Promise<void> {
     if (!this.connection || this.isBusy()) return;
-    const sourceSlots = this.sampleSlots.flatMap((sample, index) => sample ? [index + 1] : []);
-    const mappings: ExplicitSlotMapping[] = [];
-    for (const sourceSlot of sourceSlots) {
-      const expectedTarget = this.slots.find((slot) => slot.slot === sourceSlot);
-      if (!expectedTarget) {
-        const message = `Syntakt slot ${sourceSlot} is no longer in the inspected inventory`;
-        this.dispatchExportFailure(message, false);
-        return;
-      }
-      mappings.push({ sourceSlot, targetSlot: sourceSlot, expectedTarget });
-    }
     this.transferActive = true;
     this.error = '';
     this.transferResults = [];
@@ -556,9 +535,23 @@ export class SyntaktTransferDialog extends LitElement {
     this.abortController = new AbortController();
     this.dispatchExportState(true);
     try {
-      this.transferResults = await uploadSympaktBank(this.connection, this.sampleSlots, {
+      // Render from a snapshot, and re-check the revision afterwards, so edits
+      // landing mid-render can never change what is written to the device.
+      const bankRevision = this.bankRevision;
+      const prepared = await prepareSampleExports([...this.sampleSlots], this.normalizeOnExport);
+      if (this.bankRevision !== bankRevision) {
+        throw new Error('The bank changed while preparing the export. Start the export again.');
+      }
+      if (!prepared.length) throw new Error('None of the occupied slots produced an exportable sample');
+      // One mapping per rendered sample, so slots the renderer skips (such as
+      // all-empty dual slots) can never desynchronize the mapping count.
+      const mappings: ExplicitSlotMapping[] = prepared.map(({ slot }) => {
+        const expectedTarget = this.slots.find((target) => target.slot === slot);
+        if (!expectedTarget) throw new Error(`Syntakt slot ${slot} is no longer in the inspected inventory`);
+        return { sourceSlot: slot, targetSlot: slot, expectedTarget };
+      });
+      this.transferResults = await uploadPreparedSamples(this.connection, prepared, {
         mappings,
-        normalizeOnExport: this.normalizeOnExport,
         verifyReadback,
         signal: this.abortController.signal,
         onBackupReady: (archive) => {
@@ -575,9 +568,17 @@ export class SyntaktTransferDialog extends LitElement {
       await this.refresh();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Syntakt transfer failed';
-      if (error instanceof SyntaktBatchTransferError) this.transferResults = error.results;
-      this.dispatchExportFailure(message, message.startsWith('Transfer cancelled'));
-      await this.invalidateConnection(message);
+      this.dispatchExportFailure(message, isCancellation(error));
+      if (error instanceof SyntaktBatchTransferError) {
+        // The transfer engine only throws this after device I/O began and the
+        // MIDI session was already closed for safety.
+        this.transferResults = error.results;
+        await this.invalidateConnection(message);
+      } else {
+        // Preflight failures never touched the device; keep the verified
+        // connection so the user can fix the bank and export again.
+        this.error = message;
+      }
     } finally {
       this.transferActive = false;
       this.abortController = null;
@@ -616,7 +617,7 @@ export class SyntaktTransferDialog extends LitElement {
 
   private cancelTransfer(): void { this.abortController?.abort(); }
 
-  private isBusy(): boolean { return this.transferActive || this.importingBank; }
+  isBusy(): boolean { return this.transferActive || this.importingBank; }
 
   private dispatchConnectionChange(connected: boolean): void {
     const detail = connected && this.connection
@@ -718,9 +719,29 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Let the parent export dialog paint each completed transfer before continuing. */
+/**
+ * Let the parent export dialog paint each completed transfer before continuing.
+ * Hidden tabs suspend requestAnimationFrame, so a timeout keeps the device
+ * transfer moving when the page is not visible.
+ */
 function nextPaint(): Promise<void> {
-  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  return new Promise((resolve) => {
+    const fallback = setTimeout(resolve, 200);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      clearTimeout(fallback);
+      resolve();
+    }));
+  });
+}
+
+/** Cancellation can arrive wrapped (write-state, batch errors); check the cause chain. */
+function isCancellation(error: unknown): boolean {
+  let current: unknown = error;
+  while (current) {
+    if (current instanceof DOMException && current.name === 'AbortError') return true;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return false;
 }
 
 declare global {

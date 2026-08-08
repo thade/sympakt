@@ -13,7 +13,7 @@ import type { ExportOptions, Sample, SplitSample } from '../types/index.js';
 import { MAX_SLOTS, getSplitMaxDuration } from '../types/index.js';
 import { detectPitchWithDebug } from '../services/audio-engine.js';
 import { encodeWav } from '../services/wav-encoder.js';
-import { formatSyntaktTransferCompletion } from '../services/syntakt-transfer.js';
+import { formatSyntaktTransferCompletion, formatSyntaktTransferPhase } from '../services/syntakt-transfer.js';
 import type { BankTransferProgress, BankTransferResult } from '../services/syntakt-transfer.js';
 import { classifySyntaktTransferResults } from '../services/syntakt-transfer-results.js';
 import { createSampleFromSyntaktSlot } from '../services/syntakt-import.js';
@@ -367,7 +367,7 @@ export class AppShell extends LitElement {
       : 'Connect a Syntakt before exporting';
     const syntaktExportLabel = this.syntaktExporting
       ? this.syntaktExportProgress
-        ? `Exporting Syntakt ${formatSyntaktTransferCompletion(this.syntaktExportProgress)}`
+        ? `Syntakt: ${formatSyntaktTransferPhase(this.syntaktExportProgress)} ${formatSyntaktTransferCompletion(this.syntaktExportProgress)}`
         : 'Preparing Syntakt export…'
       : 'Export to Syntakt';
     const syntaktConnectionLabel = this.syntaktDeviceName
@@ -393,7 +393,7 @@ export class AppShell extends LitElement {
           <button
             class="desktop-action ${this.headerDragOver ? 'import-highlight' : ''}"
             @click=${this.onImportZip}
-            ?disabled=${this.importing}
+            ?disabled=${this.importing || this.syntaktImporting || this.syntaktExporting}
             title="Import a sample pack from a .zip file (or drag & drop here)"
           >
             ${this.importing ? 'Importing...' : 'Import .zip'}
@@ -438,7 +438,7 @@ export class AppShell extends LitElement {
               <div class="mobile-menu">
                 <button
                   @click=${this.onMobileImport}
-                  ?disabled=${this.importing}
+                  ?disabled=${this.importing || this.syntaktImporting || this.syntaktExporting}
                 >
                   ${this.importing ? 'Importing...' : 'Import .zip'}
                 </button>
@@ -630,6 +630,12 @@ export class AppShell extends LitElement {
   }
 
   private async importZipFile(file: File): Promise<void> {
+    // A ZIP import replaces the whole bank; during an active Syntakt transfer
+    // that must be refused before the bank is touched, not after.
+    if (this.syntaktTransferDialog?.isBusy()) {
+      this.showNotification('Wait for the Syntakt transfer to finish before importing', true);
+      return;
+    }
     this.importing = true;
     try {
       const result = await importSamplePack(file, this.pitchDetectionEnabled);

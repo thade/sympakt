@@ -1,24 +1,15 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { theme, sharedStyles } from '../styles/theme.js';
-import { formatSyntaktTransferCompletion } from '../services/syntakt-transfer.js';
+import { modalOverlayStyles } from './modal-styles.js';
+import { formatSyntaktTransferCompletion, formatSyntaktTransferPhase } from '../services/syntakt-transfer.js';
 import type { BankTransferProgress } from '../services/syntakt-transfer.js';
 
 /** Final confirmation and progress view for a guarded Syntakt bank export. */
 @customElement('sp-syntakt-export-dialog')
 export class SyntaktExportDialog extends LitElement {
-  static override styles = [theme, sharedStyles, css`
-    :host { display: none; }
-    :host([open]) { display: block; }
-    .overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 2100;
-      display: grid;
-      place-items: center;
-      padding: 16px;
-      background: rgba(0, 0, 0, .78);
-    }
+  static override styles = [theme, sharedStyles, modalOverlayStyles, css`
+    .overlay { z-index: 2100; }
     .dialog {
       width: min(440px, 100%);
       border: 1px solid var(--warning);
@@ -251,13 +242,7 @@ export class SyntaktExportDialog extends LitElement {
 }
 
 function formatProgress(progress: BankTransferProgress): string {
-  const labels: Record<BankTransferProgress['phase'], string> = {
-    backup: 'Backing up',
-    clear: 'Clearing',
-    write: 'Writing',
-    verify: 'Checking',
-  };
-  return `${labels[progress.phase]} · ${formatSyntaktTransferCompletion(progress)} complete`;
+  return `${formatSyntaktTransferPhase(progress)} · ${formatSyntaktTransferCompletion(progress)} complete`;
 }
 
 declare global { interface HTMLElementTagNameMap { 'sp-syntakt-export-dialog': SyntaktExportDialog; } }

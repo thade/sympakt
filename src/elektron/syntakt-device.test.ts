@@ -400,14 +400,16 @@ describe('Syntakt OS 1.40 data-sample reader', () => {
 
     await waitForSent(transport, 9);
     const contentWrite = decodeElektronSysex(transport.sent[8]);
-    expect(contentWrite?.slice(0, 21)).toEqual(Uint8Array.of(0, 8, 0, 0, 0x58, 0, 0, 0, 2, 0, 0, 0, 0, contentWrite![13], contentWrite![14], contentWrite![15], contentWrite![16], 0, 0, 0, 99));
+    // Bytes 13–16 are the golden Elektron-variant CRC-32 of the 99-byte
+    // content block; a wiring or CRC-variant regression must fail here.
+    expect(contentWrite?.slice(0, 21)).toEqual(Uint8Array.of(0, 8, 0, 0, 0x58, 0, 0, 0, 2, 0, 0, 0, 0, 0xf5, 0xf2, 0x11, 0xad, 0, 0, 0, 99));
     expect(contentWrite?.slice(21, 25)).toEqual(Uint8Array.of(0xac, 0x11, 0xd3, 0x03));
     transport.receive(writerBlockResponse(8, 2, 0, 99));
 
     await waitForSent(transport, 10);
     const footerWrite = decodeElektronSysex(transport.sent[9]);
-    expect(footerWrite?.slice(0, 21)).toEqual(Uint8Array.of(0, 9, 0, 0, 0x58, 0, 0, 0, 2, 0, 0, 0, 1, footerWrite![13], footerWrite![14], footerWrite![15], footerWrite![16], 0, 0, 0, 12));
-    expect(footerWrite?.slice(25)).toEqual(Uint8Array.of(0, 0, 0, 12, 0xaa, 0xa1, 0xda, 0xaa));
+    expect(footerWrite?.slice(0, 21)).toEqual(Uint8Array.of(0, 9, 0, 0, 0x58, 0, 0, 0, 2, 0, 0, 0, 1, 0xf3, 0x24, 0x54, 0xff, 0, 0, 0, 12));
+    expect(footerWrite?.slice(21)).toEqual(Uint8Array.of(0x95, 0x49, 0x1f, 0x0d, 0, 0, 0, 12, 0xaa, 0xa1, 0xda, 0xaa));
     transport.receive(writerBlockResponse(9, 2, 1, 111));
 
     await waitForSent(transport, 11);

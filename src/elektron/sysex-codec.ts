@@ -19,14 +19,17 @@ export function pack7Bit(payload: Uint8Array): Uint8Array {
 }
 
 export function unpack7Bit(packed: Uint8Array): Uint8Array {
-  const bytes: number[] = [];
+  // Each full 8-byte group (1 MSB byte + 7 data bytes) yields 7 output bytes.
+  const remainder = packed.length % 8;
+  const bytes = new Uint8Array(Math.floor(packed.length / 8) * 7 + Math.max(0, remainder - 1));
+  let target = 0;
   for (let source = 0; source < packed.length; source += 8) {
     const msbs = packed[source];
     for (let bit = 0; bit < 7 && source + bit + 1 < packed.length; bit++) {
-      bytes.push(packed[source + bit + 1] | ((msbs & (1 << (6 - bit))) ? 0x80 : 0));
+      bytes[target++] = packed[source + bit + 1] | ((msbs & (1 << (6 - bit))) ? 0x80 : 0);
     }
   }
-  return new Uint8Array(bytes);
+  return bytes;
 }
 
 export function encodeElektronSysex(payload: Uint8Array): Uint8Array {

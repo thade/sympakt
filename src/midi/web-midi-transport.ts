@@ -76,12 +76,15 @@ export class WebMidiTransport implements MidiTransport {
 
   private static pairedDevices(access: MIDIAccess): WebMidiDevice[] {
     const inputs = [...access.inputs.values()];
-    const outputs = [...access.outputs.values()];
+    // Each output can only belong to one pair, so two same-named port pairs
+    // bind in enumeration order instead of both claiming the first output.
+    const outputs = new Set([...access.outputs.values()]);
     const devices: WebMidiDevice[] = [];
     for (const input of inputs) {
-      const output = outputs.find((candidate) => candidate.name === input.name)
-        ?? outputs.find((candidate) => candidate.manufacturer === input.manufacturer);
+      const output = [...outputs].find((candidate) => pairableName(candidate.name) === pairableName(input.name))
+        ?? [...outputs].find((candidate) => !!candidate.manufacturer && candidate.manufacturer === input.manufacturer);
       if (output) {
+        outputs.delete(output);
         // This is passed through a <select>; JSON keeps the opaque Web MIDI
         // port IDs reversible without embedding a null character in HTML.
         devices.push({
@@ -134,6 +137,16 @@ export class WebMidiTransport implements MidiTransport {
     const error = new MidiTransportError(message);
     for (const listener of this.disconnectListeners) listener(error);
   }
+}
+
+/**
+ * Windows decorates a device's ports as `MIDIIN2 (Name)` / `MIDIOUT2 (Name)`,
+ * so input and output names of the same device never match verbatim there.
+ */
+function pairableName(name: string | null): string {
+  const trimmed = (name ?? '').trim();
+  const decorated = /^midi(?:in|out)\d*\s+\((.+)\)$/i.exec(trimmed);
+  return (decorated?.[1] ?? trimmed).trim().toLowerCase();
 }
 
 function syntaktRank(device: WebMidiDevice): number {

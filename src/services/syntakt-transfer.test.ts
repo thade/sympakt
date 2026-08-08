@@ -105,8 +105,16 @@ describe('guarded Syntakt transfer', () => {
     expect(cancelledEvents).toEqual([]);
   });
 
+  it('backs up device names that windows-1252 stores beyond ASCII', async () => {
+    enabled(); const events: string[] = []; const link = connection(events, new Map([[1, sample(1, 'Böö', Uint8Array.of(1, 0))]]));
+    await uploadPreparedSamples(link, [prepared(1, '01_NEW.wav', Uint8Array.of(2, 0))], {
+      mappings: [{ sourceSlot: 1, targetSlot: 1, expectedTarget: record(1) }], onBackupReady: () => undefined, onProgress: () => undefined,
+    });
+    expect(events).toEqual(['read-1', 'write-1', 'read-1']);
+  });
+
   it('names the slot when an existing target cannot be backed up', async () => {
-    enabled(); const events: string[] = []; const link = connection(events, new Map([[1, sample(1, 'é', Uint8Array.of(1, 0))]]));
+    enabled(); const events: string[] = []; const link = connection(events, new Map([[1, sample(1, '☂', Uint8Array.of(1, 0))]]));
     await expect(uploadPreparedSamples(link, [prepared(1, '01_NEW.wav', Uint8Array.of(2, 0))], {
       mappings: [{ sourceSlot: 1, targetSlot: 1, expectedTarget: record(1) }], onBackupReady: () => undefined, onProgress: () => undefined,
     })).rejects.toThrow('Syntakt slot 1 cannot be backed up');

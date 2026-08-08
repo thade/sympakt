@@ -1,13 +1,11 @@
 import { WebMidiTransport } from '../midi/web-midi-transport.js';
 import { ElektronSession } from '../elektron/elektron-session.js';
-import { SYNTAKT_WRITE_SUPPORTED_OS_VERSIONS, SyntaktDevice, SyntaktWriteStateUnknownError } from '../elektron/syntakt-device.js';
+import { assertSyntaktWriteOsVersion, bytesEqual, SyntaktDevice, SyntaktWriteStateUnknownError } from '../elektron/syntakt-device.js';
 import { buildSyntaktDataSample, SYNTAKT_DATA_SAMPLE_CONTAINER_OVERHEAD_BYTES } from '../elektron/syntakt-data-sample.js';
 import type { SyntaktSampleSlot } from '../elektron/syntakt-slot-list.js';
-import { prepareSampleExports } from './zip-service.js';
 import type { PreparedSampleExport } from './zip-service.js';
 import { backupFromPcm, createVerifiedSyntaktBackup, assertRestorableSyntaktName, sha256Hex } from './syntakt-backup.js';
 import type { ParsedSyntaktBackup, SyntaktBackupContent, SyntaktBackupIntent } from './syntakt-backup.js';
-import type { Sample } from '../types/index.js';
 import type { WebMidiDevice } from '../midi/web-midi-transport.js';
 
 export interface SyntaktConnection {
@@ -42,9 +40,20 @@ export function formatSyntaktTransferCompletion(progress: Pick<BankTransferProgr
   return `${progress.completedFiles}/${progress.totalFiles}`;
 }
 
+/** Canonical phase label used by both export surfaces. */
+export function formatSyntaktTransferPhase(progress: Pick<BankTransferProgress, 'phase'>): string {
+  const labels: Record<BankTransferProgress['phase'], string> = {
+    backup: 'Backing up',
+    clear: 'Clearing',
+    write: 'Writing',
+    verify: 'Checking',
+  };
+  return labels[progress.phase];
+}
+
 export class SyntaktBatchTransferError extends Error {
-  constructor(message: string, readonly results: readonly BankTransferResult[]) {
-    super(message);
+  constructor(message: string, readonly results: readonly BankTransferResult[], options?: ErrorOptions) {
+    super(message, options);
     this.name = 'SyntaktBatchTransferError';
   }
 }
@@ -65,17 +74,8 @@ export async function inspectSyntaktSlots(
   return connection.device.listSampleSlots(signal);
 }
 
-export async function uploadSympaktBank(
-  connection: SyntaktConnection,
-  slots: ReadonlyArray<Sample | null>,
-  options: TransferOptions,
-): Promise<readonly BankTransferResult[]> {
-  return uploadPreparedSamples(connection, await prepareSampleExports(slots, options.normalizeOnExport), options);
-}
-
 type TransferOptions = {
   mappings: readonly ExplicitSlotMapping[];
-  normalizeOnExport: boolean;
   verifyReadback?: boolean;
   signal?: AbortSignal;
   /** Must start the browser download synchronously; return only after it is triggered. */
@@ -84,25 +84,26 @@ type TransferOptions = {
 };
 
 /**
- * One guarded export: render → read all targets → build/reopen/hash-verify ZIP
+ * One guarded export: read all targets → build/reopen/hash-verify ZIP
  * → trigger its download → write sequentially. No writer can run earlier.
  */
 export async function uploadPreparedSamples(
   connection: SyntaktConnection,
   prepared: readonly PreparedSampleExport[],
-  options: Omit<TransferOptions, 'normalizeOnExport'>,
+  options: TransferOptions,
 ): Promise<readonly BankTransferResult[]> {
   if (!isSyntaktTransferWriteEnabled()) throw new Error('Direct Syntakt writing requires a secure Web MIDI context');
-  if (!SYNTAKT_WRITE_SUPPORTED_OS_VERSIONS.has(connection.identity.osVersion)) {
-    throw new Error(
-      `Syntakt OS ${connection.identity.osVersion} is read-only until direct-write conformance is complete`,
-    );
-  }
+  assertSyntaktWriteOsVersion(connection.identity.osVersion);
   const mappings = validateMappings(prepared.map(({ slot }) => slot), options.mappings);
   const intents = prepared.map((item) => {
     const mapping = mappings.get(item.slot)!;
     const intendedName = syntaktSlotName(item.filename);
-    buildSyntaktDataSample(mapping.targetSlot, intendedName, item.pcm16le);
+    // Validate every write container before any device command can run, and
+    // name the offending slot so one bad sample is easy to find and fix.
+    try { buildSyntaktDataSample(mapping.targetSlot, intendedName, item.pcm16le); }
+    catch (error) {
+      throw new Error(`Sympakt slot ${item.slot} can't be exported: ${asError(error).message}`, { cause: error });
+    }
     return {
       sourceSlot: item.slot,
       targetSlot: mapping.targetSlot,
@@ -199,11 +200,7 @@ export async function restoreSyntaktBackup(
   options: { signal?: AbortSignal; onProgress: (progress: BankTransferProgress) => void },
 ): Promise<readonly BankTransferResult[]> {
   if (!isSyntaktTransferWriteEnabled()) throw new Error('Direct Syntakt writing requires a secure Web MIDI context');
-  if (!SYNTAKT_WRITE_SUPPORTED_OS_VERSIONS.has(connection.identity.osVersion)) {
-    throw new Error(
-      `Syntakt OS ${connection.identity.osVersion} is read-only until direct-write conformance is complete`,
-    );
-  }
+  assertSyntaktWriteOsVersion(connection.identity.osVersion);
   const entries: SyntaktRestoreEntry[] = backup.manifest.entries.map((entry) => ({
     targetSlot: entry.targetSlot,
     original: backup.originals.get(entry.targetSlot)!,
@@ -337,7 +334,7 @@ function transferError(
   const message = error instanceof DOMException && error.name === 'AbortError'
     ? 'Transfer cancelled. Reconnect the Syntakt to continue.'
     : asError(error).message;
-  return new SyntaktBatchTransferError(message, results);
+  return new SyntaktBatchTransferError(message, results, { cause: error });
 }
 function progress(
   phase: 'backup' | 'clear' | 'write' | 'verify',
@@ -395,7 +392,7 @@ function validateMappings(
 }
 function assertBackupTargetName(slot: number, name: string): void {
   try { assertRestorableSyntaktName(name); }
-  catch { throw new Error(`Syntakt slot ${slot} cannot be backed up: sample names must be 1–16 ASCII bytes`); }
+  catch { throw new Error(`Syntakt slot ${slot} cannot be backed up: sample names must be 1–16 windows-1252 characters`); }
 }
 function sameOriginal(
   current: Awaited<ReturnType<SyntaktDevice['downloadSlot']>>,
@@ -417,8 +414,5 @@ function syntaktSlotName(filename: string): string {
     .replace(/^\d+_/, '')
     .trim();
   return (base || 'Sympakt').slice(0, 16);
-}
-function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 function asError(value: unknown): Error { return value instanceof Error ? value : new Error('Syntakt transfer failed'); }

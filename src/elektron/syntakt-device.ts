@@ -42,11 +42,15 @@ export function assertSupportedSyntaktIdentity(identity: SyntaktIdentity): void 
   }
 }
 
+export function assertSyntaktWriteOsVersion(osVersion: string): void {
+  if (!SYNTAKT_WRITE_SUPPORTED_OS_VERSIONS.has(osVersion)) {
+    throw new Error(`Syntakt OS ${osVersion || 'unknown'} is read-only until direct-write conformance is complete`);
+  }
+}
+
 export function assertSyntaktWriteIdentity(identity: SyntaktIdentity): void {
   assertSupportedSyntaktIdentity(identity);
-  if (!SYNTAKT_WRITE_SUPPORTED_OS_VERSIONS.has(identity.osVersion)) {
-    throw new Error(`Syntakt OS ${identity.osVersion || 'unknown'} is read-only until direct-write conformance is complete`);
-  }
+  assertSyntaktWriteOsVersion(identity.osVersion);
 }
 
 export interface UploadProgress {
@@ -55,13 +59,13 @@ export interface UploadProgress {
 }
 
 export class SyntaktWriteStateUnknownError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = 'SyntaktWriteStateUnknownError';
   }
 }
 
-function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+export function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
   if (left.length !== right.length) return false;
   for (let index = 0; index < left.length; index += 1) if (left[index] !== right[index]) return false;
   return true;
@@ -311,6 +315,7 @@ export class SyntaktDevice {
       throw new SyntaktWriteStateUnknownError(
         `The write may not have finished (${detail}). `
         + 'Sympakt disconnected — check that slot on the Syntakt before continuing.',
+        { cause: error },
       );
     }
   }
@@ -362,6 +367,7 @@ export class SyntaktDevice {
       throw new SyntaktWriteStateUnknownError(
         `The clear may not have finished (${detail}). `
         + 'Sympakt disconnected — check that slot on the Syntakt before continuing.',
+        { cause: error },
       );
     }
   }

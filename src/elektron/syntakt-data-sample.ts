@@ -120,18 +120,41 @@ function isCapturedEmptySlot(raw: Uint8Array): boolean {
   return true;
 }
 
+const CRC32_TABLE = new Uint32Array(256).map((_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) value = (value & 1) ? (value >>> 1) ^ 0xedb88320 : value >>> 1;
+  return value;
+});
+
+/** One reflected CRC-32 pass without seeding or finalization; callers pick the variant. */
+export function crc32Update(crc: number, data: Uint8Array): number {
+  let next = crc;
+  for (const value of data) next = (next >>> 8) ^ CRC32_TABLE[(next ^ value) & 0xff];
+  return next >>> 0;
+}
+
 /**
  * CRC-32 with Elektron's captured initial state. The expected value for
  * `123456789` is 0xd202d277, which distinguishes it from the usual CRC-32
  * initial state used by ZIP files.
  */
 export function syntaktCrc32(data: Uint8Array): number {
-  let crc = 0;
-  for (const value of data) {
-    crc ^= value;
-    for (let bit = 0; bit < 8; bit += 1) crc = (crc & 1) ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+  return (crc32Update(0, data) ^ 0xffffffff) >>> 0;
+}
+
+// Exact reverse of the windows-1252 decoding used for names read off the
+// device, so every name the Syntakt can store round-trips through backups.
+const WINDOWS_1252_BYTE_BY_CHAR: ReadonlyMap<string, number> = new Map(
+  [...new TextDecoder('windows-1252').decode(Uint8Array.from({ length: 256 }, (_, byte) => byte))]
+    .map((char, byte) => [char, byte]),
+);
+
+export function encodeSyntaktSampleName(name: string): Uint8Array {
+  const bytes = [...name].map((char) => WINDOWS_1252_BYTE_BY_CHAR.get(char));
+  if (!name || bytes.length > MAX_NAME_BYTES || bytes.some((value) => value === undefined)) {
+    throw new Error('Syntakt sample names must be 1–16 windows-1252 characters');
   }
-  return (crc ^ 0xffffffff) >>> 0;
+  return Uint8Array.from(bytes as number[]);
 }
 
 /** Build the two captured OS 1.40 writer parts from canonical 16-bit LE PCM. */
@@ -148,11 +171,7 @@ export function buildSyntaktDataSample(
   }
   const frames = pcm16le.length / 2;
   if (frames > SYNTAKT_MAX_SAMPLE_FRAMES) throw new Error('Syntakt samples cannot exceed five seconds');
-  const nameBytes = new TextEncoder().encode(name);
-  const invalidName = !name
-    || nameBytes.length > MAX_NAME_BYTES
-    || [...nameBytes].some((value) => value > 0x7f);
-  if (invalidName) throw new Error('Syntakt sample names must be 1–16 ASCII bytes');
+  const nameBytes = encodeSyntaktSampleName(name);
 
   const payloadBytes = SLOT_HEADER_BYTES + pcm16le.length;
   const content = new Uint8Array(DATA_HEADER_BYTES + payloadBytes);

@@ -1,5 +1,5 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
-import { SYNTAKT_MAX_SAMPLE_FRAMES } from '../elektron/syntakt-data-sample.js';
+import { crc32Update, encodeSyntaktSampleName, SYNTAKT_MAX_SAMPLE_FRAMES } from '../elektron/syntakt-data-sample.js';
 import { extractPcm16leWav } from './wav-decoder.js';
 import { encodePcm16leWav } from './wav-encoder.js';
 
@@ -60,10 +60,8 @@ export interface ParsedSyntaktBackup {
 }
 
 export function assertRestorableSyntaktName(name: string): void {
-  const bytes = new TextEncoder().encode(name);
-  if (!name || bytes.length > 16 || [...bytes].some((value) => value > 0x7f)) {
-    throw new Error('Syntakt sample names must be 1–16 ASCII bytes');
-  }
+  // A restorable name is exactly one the device container writer can encode.
+  encodeSyntaktSampleName(name);
 }
 
 export function backupFileName(slot: number, name: string): string {
@@ -252,10 +250,6 @@ function hasSyntaktBackupHeader(archive: Uint8Array): boolean {
   return archive.length >= SYNTAKT_BACKUP_HEADER.length && SYNTAKT_BACKUP_HEADER.every((byte, index) => archive[index] === byte);
 }
 
-export function backupAsWav(content: SyntaktBackupContent): Uint8Array | null {
-  return 'empty' in content ? null : new Uint8Array(content.wavData);
-}
-
 export function backupFromPcm(slot: number, name: string, pcm16le: Uint8Array): SyntaktSlotBackup {
   return { slot, name, pcm16le: new Uint8Array(pcm16le), wavData: encodePcm16leWav(pcm16le) };
 }
@@ -412,17 +406,8 @@ function assertCentralLocalLink(archive: Uint8Array, centralOffset: number, entr
   if (localPath !== entry.path) throw new Error('Invalid Syntakt backup ZIP');
 }
 
-function zipCrc32Update(crc: number, data: Uint8Array): number {
-  let next = crc;
-  for (const value of data) {
-    next ^= value;
-    for (let bit = 0; bit < 8; bit += 1) next = (next & 1) ? (next >>> 1) ^ 0xedb88320 : next >>> 1;
-  }
-  return next >>> 0;
-}
-
 function zipCrc32(data: Uint8Array): number {
-  return (zipCrc32Update(0xffffffff, data) ^ 0xffffffff) >>> 0;
+  return (crc32Update(0xffffffff, data) ^ 0xffffffff) >>> 0;
 }
 
 function findEndOfCentralDirectory(archive: Uint8Array): number {
