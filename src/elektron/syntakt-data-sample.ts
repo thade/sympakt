@@ -55,7 +55,9 @@ export function parseSyntaktDataSample(raw: Uint8Array): SyntaktDataSampleRead {
 
   const payloadBytes = readUint32BE(raw, 25);
   const footerBytes = raw[30];
-  if (footerBytes !== FOOTER_BYTES || raw.length !== DATA_HEADER_BYTES + payloadBytes + footerBytes) throw new Error('Invalid Syntakt data-sample length');
+  if (footerBytes !== FOOTER_BYTES || raw.length !== DATA_HEADER_BYTES + payloadBytes + footerBytes) {
+    throw new Error('Invalid Syntakt data-sample length');
+  }
 
   const slot = readUint32BE(raw, 21);
   if (!Number.isInteger(slot) || slot < 1 || slot > 64) throw new Error('Invalid Syntakt sample slot number');
@@ -74,12 +76,16 @@ export function parseSyntaktDataSample(raw: Uint8Array): SyntaktDataSampleRead {
     return { slot, empty: true, footerHash };
   }
 
-  if (raw.length < DATA_HEADER_BYTES + SLOT_HEADER_BYTES + FOOTER_BYTES) throw new Error('Syntakt data sample is too short');
+  if (raw.length < DATA_HEADER_BYTES + SLOT_HEADER_BYTES + FOOTER_BYTES) {
+    throw new Error('Syntakt data sample is too short');
+  }
 
   const slotHeaderOffset = DATA_HEADER_BYTES;
   if (readUint32BE(raw, slotHeaderOffset) !== SLOT_MAGIC) throw new Error('Invalid Syntakt sample-slot header');
   const frames = readUint32BE(raw, slotHeaderOffset + 8);
-  const name = new TextDecoder('windows-1252').decode(raw.slice(slotHeaderOffset + 12, slotHeaderOffset + 28)).replace(/\0.*$/, '');
+  const name = new TextDecoder('windows-1252')
+    .decode(raw.slice(slotHeaderOffset + 12, slotHeaderOffset + 28))
+    .replace(/\0.*$/, '');
   const pcmStart = slotHeaderOffset + SLOT_HEADER_BYTES;
   const pcmBigEndian = raw.slice(pcmStart, footerOffset);
   if (pcmBigEndian.length !== frames * 2 || pcmBigEndian.length % 2) throw new Error('Invalid Syntakt sample PCM length');
@@ -87,8 +93,14 @@ export function parseSyntaktDataSample(raw: Uint8Array): SyntaktDataSampleRead {
   // The captured writer uses the literal 12-byte footer length. The
   // same stored sample, when read back from OS 1.40, reports payloadBytes in
   // this field instead. Both forms have the same CRC and footer magic.
-  if ((footerSize !== FOOTER_BYTES && footerSize !== payloadBytes) || footerMagic !== FOOTER_MAGIC || footerHash !== calculatedHash) {
-    throw new Error(`Invalid Syntakt data-sample footer (stored=${footerHash.toString(16)}, calculated=${calculatedHash.toString(16)}, size=${footerSize}, magic=${footerMagic.toString(16)})`);
+  const validFooterSize = footerSize === FOOTER_BYTES || footerSize === payloadBytes;
+  if (!validFooterSize || footerMagic !== FOOTER_MAGIC || footerHash !== calculatedHash) {
+    const stored = footerHash.toString(16);
+    const calculated = calculatedHash.toString(16);
+    const magic = footerMagic.toString(16);
+    throw new Error(
+      `Invalid Syntakt data-sample footer (stored=${stored}, calculated=${calculated}, size=${footerSize}, magic=${magic})`,
+    );
   }
 
   const pcm16le = new Uint8Array(pcmBigEndian.length);
@@ -123,13 +135,24 @@ export function syntaktCrc32(data: Uint8Array): number {
 }
 
 /** Build the two captured OS 1.40 writer parts from canonical 16-bit LE PCM. */
-export function buildSyntaktDataSample(slot: number, name: string, pcm16le: Uint8Array): SyntaktDataSampleUpload {
-  if (!Number.isInteger(slot) || slot < 1 || slot > 64) throw new Error('Syntakt sample slots must be between 1 and 64');
-  if (!pcm16le.length || pcm16le.length % 2) throw new Error('Syntakt sample PCM must be non-empty 16-bit mono data');
+export function buildSyntaktDataSample(
+  slot: number,
+  name: string,
+  pcm16le: Uint8Array,
+): SyntaktDataSampleUpload {
+  if (!Number.isInteger(slot) || slot < 1 || slot > 64) {
+    throw new Error('Syntakt sample slots must be between 1 and 64');
+  }
+  if (!pcm16le.length || pcm16le.length % 2) {
+    throw new Error('Syntakt sample PCM must be non-empty 16-bit mono data');
+  }
   const frames = pcm16le.length / 2;
   if (frames > SYNTAKT_MAX_SAMPLE_FRAMES) throw new Error('Syntakt samples cannot exceed five seconds');
   const nameBytes = new TextEncoder().encode(name);
-  if (!name || nameBytes.length > MAX_NAME_BYTES || [...nameBytes].some((value) => value > 0x7f)) throw new Error('Syntakt sample names must be 1–16 ASCII bytes');
+  const invalidName = !name
+    || nameBytes.length > MAX_NAME_BYTES
+    || [...nameBytes].some((value) => value > 0x7f);
+  if (invalidName) throw new Error('Syntakt sample names must be 1–16 ASCII bytes');
 
   const payloadBytes = SLOT_HEADER_BYTES + pcm16le.length;
   const content = new Uint8Array(DATA_HEADER_BYTES + payloadBytes);

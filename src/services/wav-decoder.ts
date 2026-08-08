@@ -60,7 +60,14 @@ export function parseWavHeader(buffer: ArrayBufferLike): WavInfo | null {
 /** Extract exact 16-bit / 48 kHz / mono PCM from a Sympakt backup WAV. */
 export function extractPcm16leWav(buffer: ArrayBufferLike): Uint8Array {
   const info = parseWavHeader(buffer);
-  if (!info || info.audioFormat !== 1 || info.sampleRate !== 48_000 || info.channels !== 1 || info.bitDepth !== 16 || !info.dataSize || info.dataSize % 2) {
+  const validPcm = info
+    && info.audioFormat === 1
+    && info.sampleRate === 48_000
+    && info.channels === 1
+    && info.bitDepth === 16
+    && info.dataSize > 0
+    && info.dataSize % 2 === 0;
+  if (!validPcm) {
     throw new Error('Backup WAV must be 16-bit, 48 kHz, mono PCM');
   }
   return new Uint8Array(buffer.slice(info.dataOffset, info.dataOffset + info.dataSize));

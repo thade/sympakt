@@ -349,6 +349,30 @@ export class AppShell extends LitElement {
 
   override render() {
     const filledSlots = this.bankCtrl.slots.filter((s) => s !== null).length;
+    const syntaktImportDisabled = !this.syntaktImporting && !this.syntaktImportReady;
+    const syntaktImportTitle = this.syntaktImporting
+      ? 'Cancel the current Syntakt import'
+      : this.syntaktImportReady
+        ? 'Import all 64 Syntakt slots into Sympakt'
+        : 'Connect a Syntakt before importing';
+    const syntaktImportCount = this.syntaktImportProgress?.completedSlots ?? 0;
+    const syntaktImportLabel = this.syntaktImporting
+      ? `Cancel Syntakt import ${syntaktImportCount}/64`
+      : 'Import Syntakt';
+    const syntaktExportDisabled = filledSlots === 0
+      || !this.syntaktImportReady
+      || this.syntaktExporting;
+    const syntaktExportTitle = this.syntaktImportReady
+      ? 'Back up and export the current bank to the connected Syntakt'
+      : 'Connect a Syntakt before exporting';
+    const syntaktExportLabel = this.syntaktExporting
+      ? this.syntaktExportProgress
+        ? `Exporting Syntakt ${formatSyntaktTransferCompletion(this.syntaktExportProgress)}`
+        : 'Preparing Syntakt export…'
+      : 'Export to Syntakt';
+    const syntaktConnectionLabel = this.syntaktDeviceName
+      ? `${this.syntaktDeviceName} connected`
+      : 'Connect Syntakt';
 
     return html`
       <header
@@ -377,10 +401,10 @@ export class AppShell extends LitElement {
           <button
             class="desktop-action ${this.syntaktImporting ? 'danger' : 'primary'}"
             @click=${this.onSyntaktImportAction}
-            ?disabled=${!this.syntaktImporting && !this.syntaktImportReady}
-            title=${this.syntaktImporting ? 'Cancel the current Syntakt import' : this.syntaktImportReady ? 'Import all 64 Syntakt slots into Sympakt' : 'Connect a Syntakt before importing'}
+            ?disabled=${syntaktImportDisabled}
+            title=${syntaktImportTitle}
           >
-            ${this.syntaktImporting ? `Cancel Syntakt import ${this.syntaktImportProgress?.completedSlots ?? 0}/64` : 'Import Syntakt'}
+            ${syntaktImportLabel}
           </button>
           <button
             class="desktop-action primary"
@@ -393,17 +417,17 @@ export class AppShell extends LitElement {
           <button
             class="desktop-action danger"
             @click=${this.onOpenSyntaktExport}
-            ?disabled=${filledSlots === 0 || !this.syntaktImportReady || this.syntaktExporting}
-            title=${this.syntaktImportReady ? 'Back up and export the current bank to the connected Syntakt' : 'Connect a Syntakt before exporting'}
+            ?disabled=${syntaktExportDisabled}
+            title=${syntaktExportTitle}
           >
-            ${this.syntaktExporting ? this.syntaktExportProgress ? `Exporting Syntakt ${formatSyntaktTransferCompletion(this.syntaktExportProgress)}` : 'Preparing Syntakt export…' : 'Export to Syntakt'}
+            ${syntaktExportLabel}
           </button>
           <button
             class="desktop-action"
             @click=${this.onOpenSyntaktTransfer}
             title="Choose and connect a Syntakt over USB MIDI"
           >
-            ${iconGrid} ${this.syntaktDeviceName ? `${this.syntaktDeviceName} connected` : 'Connect Syntakt'}
+            ${iconGrid} ${syntaktConnectionLabel}
           </button>
           <button class="desktop-action danger" @click=${this.onClearAll} ?disabled=${filledSlots === 0} title="Remove all samples from the bank">
             Clear
@@ -425,9 +449,17 @@ export class AppShell extends LitElement {
                 >
                   ${this.exporting ? 'Exporting...' : 'Export .zip'}
                 </button>
-                <button class="danger" @click=${this.onMobileSyntaktExport} ?disabled=${filledSlots === 0 || !this.syntaktImportReady || this.syntaktExporting}>${this.syntaktExporting ? 'Exporting Syntakt…' : 'Export to Syntakt'}</button>
-                <button @click=${this.onOpenSyntaktTransfer}>${this.syntaktDeviceName ? `${this.syntaktDeviceName} connected` : 'Connect Syntakt'}</button>
-                <button class=${this.syntaktImporting ? 'danger' : 'primary'} @click=${this.onSyntaktImportAction} ?disabled=${!this.syntaktImporting && !this.syntaktImportReady}>${this.syntaktImporting ? `Cancel import ${this.syntaktImportProgress?.completedSlots ?? 0}/64` : 'Import Syntakt'}</button>
+                <button
+                  class="danger"
+                  @click=${this.onMobileSyntaktExport}
+                  ?disabled=${syntaktExportDisabled}
+                >${this.syntaktExporting ? 'Exporting Syntakt…' : 'Export to Syntakt'}</button>
+                <button @click=${this.onOpenSyntaktTransfer}>${syntaktConnectionLabel}</button>
+                <button
+                  class=${this.syntaktImporting ? 'danger' : 'primary'}
+                  @click=${this.onSyntaktImportAction}
+                  ?disabled=${syntaktImportDisabled}
+                >${this.syntaktImporting ? `Cancel import ${syntaktImportCount}/64` : 'Import Syntakt'}</button>
                 <button class="danger" @click=${this.onMobileClear} ?disabled=${filledSlots === 0}>
                   Clear all
                 </button>
@@ -601,18 +633,22 @@ export class AppShell extends LitElement {
     this.importing = true;
     try {
       const result = await importSamplePack(file, this.pitchDetectionEnabled);
-      const slots = result.syntaktBackup
-        ? result.syntaktBackup.manifest.entries.reduce<ReadonlyArray<Sample | null>>((bank, entry) => {
-            const original = result.syntaktBackup!.originals.get(entry.targetSlot);
+      const backup = result.syntaktBackup;
+      const slots = backup
+        ? backup.manifest.entries.reduce<ReadonlyArray<Sample | null>>((bank, entry) => {
+            const original = backup.originals.get(entry.targetSlot);
             const next = [...bank];
             next[entry.targetSlot - 1] = original && !('empty' in original)
-              ? createSampleFromSyntaktSlot({ slot: entry.targetSlot, name: original.name, pcm16le: original.pcm16le }, this.pitchDetectionEnabled)
+              ? createSampleFromSyntaktSlot(
+                  { slot: entry.targetSlot, name: original.name, pcm16le: original.pcm16le },
+                  this.pitchDetectionEnabled,
+                )
               : null;
             return next;
           }, new Array(MAX_SLOTS).fill(null))
         : result.slots;
       bankState.loadBank([...slots]);
-      if (result.syntaktBackup) this.syntaktTransferDialog?.armRestore(result.syntaktBackup, bankState.revision);
+      if (backup) this.syntaktTransferDialog?.armRestore(backup, bankState.revision);
       else this.syntaktTransferDialog?.clearRestorePlan();
       this.exportIncludeOriginals = result.includeOriginals;
       this.exportPackName = result.packName;
@@ -621,7 +657,7 @@ export class AppShell extends LitElement {
       if (result.warning) {
         alert(result.warning);
       }
-      this.showNotification(result.syntaktBackup
+      this.showNotification(backup
         ? `Imported Syntakt backup — ${count} samples. Connect the Syntakt, then choose Restore backup exactly.`
         : `Imported "${result.packName}" — ${count} samples`);
     } catch (err) {
@@ -679,7 +715,9 @@ export class AppShell extends LitElement {
     this.syntaktExportOpen = true;
   }
 
-  private onSyntaktConnectionChange(event: CustomEvent<{ connected: boolean; name?: string; importReady?: boolean }>): void {
+  private onSyntaktConnectionChange(
+    event: CustomEvent<{ connected: boolean; name?: string; importReady?: boolean }>,
+  ): void {
     this.syntaktDeviceName = event.detail.connected ? (event.detail.name || 'Syntakt') : '';
     this.syntaktImportReady = !!event.detail.importReady;
     if (!event.detail.connected) {
@@ -690,7 +728,9 @@ export class AppShell extends LitElement {
     }
   }
 
-  private onSyntaktBankImportState(event: CustomEvent<{ active: boolean; progress: SyntaktBankImportProgress | null }>): void {
+  private onSyntaktBankImportState(
+    event: CustomEvent<{ active: boolean; progress: SyntaktBankImportProgress | null }>,
+  ): void {
     if (event.detail.active && !this.syntaktImporting) this.syntaktImportBankRevision = bankState.revision;
     this.syntaktImporting = event.detail.active;
     this.syntaktImportProgress = event.detail.progress;
@@ -706,13 +746,20 @@ export class AppShell extends LitElement {
     void this.syntaktTransferDialog?.importBank();
   }
 
-  private onSyntaktBankImport(event: CustomEvent<{ slots: ReadonlyArray<ImportedSyntaktSlot | null> }>): void {
+  private onSyntaktBankImport(
+    event: CustomEvent<{ slots: ReadonlyArray<ImportedSyntaktSlot | null> }>,
+  ): void {
     try {
       if (this.syntaktImportBankRevision !== bankState.revision) {
-        this.showNotification('The import finished, but Sympakt changed while it was running. The imported samples were not applied.', true);
+        this.showNotification(
+          'The import finished, but Sympakt changed while it was running. The imported samples were not applied.',
+          true,
+        );
         return;
       }
-      const samples = event.detail.slots.map((slot) => slot ? createSampleFromSyntaktSlot(slot, this.pitchDetectionEnabled) : null);
+      const samples = event.detail.slots.map((slot) => slot
+        ? createSampleFromSyntaktSlot(slot, this.pitchDetectionEnabled)
+        : null);
       bankState.replaceAll(samples);
       const count = samples.filter((sample) => sample !== null).length;
       this.exportPackName = 'Syntakt Sample Library';
@@ -741,12 +788,16 @@ export class AppShell extends LitElement {
     this.syntaktTransferDialog?.cancelBankExport();
   }
 
-  private onSyntaktBankExportState(event: CustomEvent<{ active: boolean; progress: BankTransferProgress | null }>): void {
+  private onSyntaktBankExportState(
+    event: CustomEvent<{ active: boolean; progress: BankTransferProgress | null }>,
+  ): void {
     this.syntaktExporting = event.detail.active;
     this.syntaktExportProgress = event.detail.progress;
   }
 
-  private onSyntaktBankExportComplete(event: CustomEvent<{ results: readonly BankTransferResult[]; verifyReadback: boolean }>): void {
+  private onSyntaktBankExportComplete(
+    event: CustomEvent<{ results: readonly BankTransferResult[]; verifyReadback: boolean }>,
+  ): void {
     const count = event.detail.results.length;
     const summary = classifySyntaktTransferResults(event.detail.results);
     this.syntaktExportResult = summary.verified
