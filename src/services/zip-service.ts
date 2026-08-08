@@ -25,6 +25,8 @@ import {
   detectPitchWithDebug,
 } from './audio-engine.js';
 import { encodeWav } from './wav-encoder.js';
+import { tryParseSyntaktBackup } from './syntakt-backup.js';
+import type { ParsedSyntaktBackup } from './syntakt-backup.js';
 
 /**
  * Build dual-split PCM: A in first half, B reversed in second half, silence in between.
@@ -100,16 +102,24 @@ async function exportDualSplitPCM(sample: Sample, speedFactor: number): Promise<
   return result;
 }
 
-/**
- * Export the sample bank as a .zip file and trigger download.
- */
-export async function exportSamplePack(
-  slots: ReadonlyArray<Sample | null>,
-  options: ExportOptions,
-): Promise<Blob> {
-  const files: Record<string, Uint8Array> = {};
-  const slotMetadata: SlotMetadata[] = [];
+/** A rendered device-ready sample shared by ZIP export and direct Syntakt transfer. */
+export interface PreparedSampleExport {
+  slot: number;
+  filename: string;
+  /** Signed 16-bit little-endian mono PCM, without a WAV container. */
+  pcm16le: Uint8Array;
+  wavData: Uint8Array;
+}
 
+/**
+ * Render every occupied slot using Sympakt's export rules. This deliberately
+ * excludes metadata and originals: those are ZIP-only concerns.
+ */
+export async function prepareSampleExports(
+  slots: ReadonlyArray<Sample | null>,
+  normalizeOnExport: boolean,
+): Promise<PreparedSampleExport[]> {
+  const prepared: PreparedSampleExport[] = [];
   for (let i = 0; i < slots.length; i++) {
     const sample = slots[i];
     if (!sample) continue;
@@ -153,31 +163,54 @@ export async function exportSamplePack(
     }
 
     // Normalize PCM to maximize volume without clipping
-    if (options.normalizeOnExport) {
-      let peak = 0;
-      for (let j = 0; j < pcm.length; j++) {
-        const abs = Math.abs(pcm[j]);
-        if (abs > peak) peak = abs;
-      }
-      if (peak > 0 && peak < 1) {
-        const gain = 1 / peak;
-        for (let j = 0; j < pcm.length; j++) {
-          pcm[j] *= gain;
-        }
-      }
-    }
+    if (normalizeOnExport) normalizePCM(pcm);
 
-    let exportName: string;
+    let filename: string;
     if (sample.splitEnabled) {
       const aName = sample.aEmpty ? 'empty' : sanitizeFilename(sample.name);
       const bName = sample.splitSample ? sanitizeFilename(sample.splitSample.name) : 'empty';
-      exportName = `${slotNumber}_${aName}-${bName}_DUAL.wav`;
+      filename = `${slotNumber}_${aName}-${bName}_DUAL.wav`;
     } else {
       const noteSuffix = sample.detectedNote ? `_${sample.detectedNote}` : '';
-      exportName = `${slotNumber}_${sanitizeFilename(sample.name)}${noteSuffix}.wav`;
+      filename = `${slotNumber}_${sanitizeFilename(sample.name)}${noteSuffix}.wav`;
     }
-    const wavData = encodeWav(pcm);
-    files[exportName] = new Uint8Array(wavData);
+    const wavData = new Uint8Array(encodeWav(pcm));
+    prepared.push({ slot: i + 1, filename, pcm16le: wavData.slice(44), wavData });
+  }
+  return prepared;
+}
+
+export function normalizePCM(pcm: Float32Array): void {
+  let peak = 0;
+  for (const value of pcm) {
+    const abs = Math.abs(value);
+    if (abs > peak) peak = abs;
+  }
+  if (peak > 0 && peak < 1) {
+    const gain = 1 / peak;
+    for (let i = 0; i < pcm.length; i++) pcm[i] *= gain;
+  }
+}
+
+/**
+ * Export the sample bank as a .zip file and trigger download.
+ */
+export async function exportSamplePack(
+  slots: ReadonlyArray<Sample | null>,
+  options: ExportOptions,
+): Promise<Blob> {
+  const files: Record<string, Uint8Array> = {};
+  const slotMetadata: SlotMetadata[] = [];
+  const preparedBySlot = new Map(
+    (await prepareSampleExports(slots, options.normalizeOnExport)).map((prepared) => [prepared.slot, prepared]),
+  );
+
+  for (let i = 0; i < slots.length; i++) {
+    const sample = slots[i];
+    if (!sample) continue;
+    const prepared = preparedBySlot.get(i + 1);
+    if (!prepared) continue;
+    files[prepared.filename] = prepared.wavData;
 
     const meta: SlotMetadata = {
       slot: i + 1,
@@ -252,9 +285,16 @@ export async function exportSamplePack(
 export async function importSamplePack(
   file: File,
   enablePitchDetection = false,
-): Promise<{ slots: (Sample | null)[]; packName: string; includeOriginals: boolean; warning?: string }> {
+): Promise<{ slots: (Sample | null)[]; packName: string; includeOriginals: boolean; warning?: string; syntaktBackup?: ParsedSyntaktBackup }> {
   const arrayBuffer = await file.arrayBuffer();
-  const unzipped = unzipSync(new Uint8Array(arrayBuffer));
+  const archive = new Uint8Array(arrayBuffer);
+  // Only an explicit Backup ZIP header enters the strict backup path.
+  // Every other archive follows the normal sample-pack importer unchanged.
+  const syntaktBackup = await tryParseSyntaktBackup(archive);
+  if (syntaktBackup) {
+    return { slots: new Array(MAX_SLOTS).fill(null), packName: 'Syntakt Backup', includeOriginals: false, syntaktBackup };
+  }
+  const unzipped = unzipSync(archive);
 
   // Try to read metadata
   let metadata: PackMetadata | null = null;
@@ -516,7 +556,10 @@ export function downloadBlob(blob: Blob, filename: string): void {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // Browsers may resolve a clicked download asynchronously. Keep the URL alive
+  // long enough for pack, slice, and backup downloads to complete their handoff;
+  // this function still throws synchronously before a Syntakt writer is opened.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 function stripExtension(filename: string): string {

@@ -3,6 +3,7 @@
  * Used for informational purposes; actual decoding uses Web Audio API.
  */
 export interface WavInfo {
+  audioFormat: number;
   sampleRate: number;
   bitDepth: number;
   channels: number;
@@ -10,7 +11,8 @@ export interface WavInfo {
   dataSize: number;
 }
 
-export function parseWavHeader(buffer: ArrayBuffer): WavInfo | null {
+export function parseWavHeader(buffer: ArrayBufferLike): WavInfo | null {
+  if (buffer.byteLength < 12) return null;
   const view = new DataView(buffer);
 
   // Check RIFF header
@@ -25,17 +27,22 @@ export function parseWavHeader(buffer: ArrayBuffer): WavInfo | null {
   let dataOffset = 0;
   let dataSize = 0;
 
-  while (offset < buffer.byteLength - 8) {
+  while (offset + 8 <= buffer.byteLength) {
     const chunkId = readString(view, offset, 4);
     const chunkSize = view.getUint32(offset + 4, true);
+    const chunkDataOffset = offset + 8;
+    if (chunkDataOffset + chunkSize > buffer.byteLength) return null;
 
     if (chunkId === 'fmt ') {
-      channels = view.getUint16(offset + 10, true);
-      sampleRate = view.getUint32(offset + 12, true);
-      bitDepth = view.getUint16(offset + 22, true);
+      if (chunkSize < 16) return null;
+      const audioFormat = view.getUint16(chunkDataOffset, true);
+      channels = view.getUint16(chunkDataOffset + 2, true);
+      sampleRate = view.getUint32(chunkDataOffset + 4, true);
+      bitDepth = view.getUint16(chunkDataOffset + 14, true);
+      if (audioFormat !== 1) return null;
       fmtFound = true;
     } else if (chunkId === 'data') {
-      dataOffset = offset + 8;
+      dataOffset = chunkDataOffset;
       dataSize = chunkSize;
       break;
     }
@@ -47,7 +54,23 @@ export function parseWavHeader(buffer: ArrayBuffer): WavInfo | null {
 
   if (!fmtFound || dataOffset === 0) return null;
 
-  return { sampleRate, bitDepth, channels, dataOffset, dataSize };
+  return { audioFormat: 1, sampleRate, bitDepth, channels, dataOffset, dataSize };
+}
+
+/** Extract exact 16-bit / 48 kHz / mono PCM from a Sympakt backup WAV. */
+export function extractPcm16leWav(buffer: ArrayBufferLike): Uint8Array {
+  const info = parseWavHeader(buffer);
+  const validPcm = info
+    && info.audioFormat === 1
+    && info.sampleRate === 48_000
+    && info.channels === 1
+    && info.bitDepth === 16
+    && info.dataSize > 0
+    && info.dataSize % 2 === 0;
+  if (!validPcm) {
+    throw new Error('Backup WAV must be 16-bit, 48 kHz, mono PCM');
+  }
+  return new Uint8Array(buffer.slice(info.dataOffset, info.dataOffset + info.dataSize));
 }
 
 function readString(view: DataView, offset: number, length: number): string {

@@ -9,7 +9,8 @@
     "prebuild": "bash scripts/download-default-pack.sh",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "keywords": [
     "elektron",
@@ -28,6 +29,7 @@
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
     "vite-plugin-minify": "^2.1.0",
-    "vite-plugin-singlefile": "^2.3.0"
+    "vite-plugin-singlefile": "^2.3.0",
+    "vitest": "^4.1.10"
   }
 }

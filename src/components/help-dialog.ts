@@ -210,6 +210,22 @@ export class HelpDialog extends LitElement {
               <li>Metadata is bundled so packs can be re-imported losslessly.</li>
             </ul>
 
+            <h3>Connect / Import Syntakt</h3>
+            <p>
+              Use <span class="accent">Connect Syntakt</span> to choose a USB MIDI device.
+              <span class="accent">Import Syntakt</span> reads all 64 sample slots into Sympakt.
+              It does not change the device. Import replaces your current bank after confirmation.
+              Empty Syntakt slots stay empty. Cancelling an import disconnects MIDI, so reconnect
+              before your next device action. Requires a secure page, normally HTTPS or localhost.
+              It also needs a browser with Web MIDI SysEx support, such as Chrome or Firefox.
+            </p>
+            <p>
+              <span class="accent">Export to Syntakt</span> writes occupied Sympakt slots to the
+              same-numbered Syntakt slots. It downloads a Backup ZIP before writing. Import that ZIP
+              later to load the originals and enable <span class="accent">Restore backup exactly</span>.
+              Readback verification is on by default. You can turn it off for a faster export.
+            </p>
+
             <h3>Shortcuts</h3>
             <ul>
               <li><kbd>P</kbd> — toggle virtual keyboard</li>

@@ -327,6 +327,14 @@ Every slot supports three kinds of drag interactions: file import (drop external
 - **A/B side selection (dual-split slots)**: when the selected sample is dual-split, the keyboard bar shows an `A | B` toggle next to the "Playing:" label. The active side is highlighted; an unavailable side (A empty or B missing) is disabled. The selected side is stored on `BankStateStore.selectedSide` (default `'a'`, not persisted, reset to `'a'` whenever a different slot is selected). The `"Playing:"` label shows the B name when B is active. `bankState.getSelectedAudio()` returns the right `{ audioBuffer, loop, lofi, duration }` tuple for the active side (using the slot's `lofi`, since lofi is per-slot), with a fallback to A when B is selected but missing. `playSamplePitchedFull()` accepts this minimal-shape object, so no API change there.
 - **Tab key**: pressing `Tab` while the keyboard is open toggles the A/B side for the currently selected slot (no-op when the slot isn't split or the other side is unavailable). `preventDefault()` is called to suppress the browser's focus navigation.
 
+## Direct Syntakt Sample Upload
+
+- **Scope**: optional USB MIDI transfer for the Syntakt sample library. It never changes projects, patterns, kits, sounds, or sample assignments. Normal editing and ZIP import/export remain available without MIDI.
+- **Compatibility**: requires a secure page, normally HTTPS or localhost, and a browser with Web MIDI SysEx support. Direct transfer supports Syntakt OS `1.40` and `1.40A` only. Other firmware is rejected before sample-library access.
+- **Safety workflow**: import reads all 64 slots and replaces the browser bank only after confirmation. Export writes an occupied Sympakt slot only to the same-numbered Syntakt slot, reads every target first, then downloads a headered Backup ZIP before writing. Its 23-byte `SYMPAKT-SYNTAKT-BACKUP` marker distinguishes backups without inspecting ordinary ZIP imports. Restore proceeds only when the device still matches the backup's original or recorded upload. Readback verification is on by default.
+- **Implementation boundaries**: keep browser transport in `src/midi/`, protocol framing and serialized requests in `src/elektron/`, and import, backup, and transfer orchestration in `src/services/`. Use the existing protocol tests and captured fixtures when changing device behaviour.
+- **Fail closed**: validate identity, firmware, inventory, paths, responses, and slot data. A cancellation, timeout, disconnect, malformed response, or uncertain write state stops the operation and closes MIDI. Do not infer that an empty or listed slot is safe to overwrite.
+
 ## Documentation Maintenance
 
 - When features are added or updated, **always update `README.md`, `AGENTS.md`, AND the in-app help** ([src/components/help-dialog.ts](src/components/help-dialog.ts)) to reflect the changes.
